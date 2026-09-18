@@ -162,6 +162,34 @@ def search_chunks(ctx: ToolContext, args: dict) -> dict:
     return {"chunks": results}
 
 
+@register(
+    "get_evidence",
+    "Get the source evidence (document, page, text) behind a chunk id that"
+    " appears in project context or a generated artifact.",
+    {
+        "type": "object",
+        "properties": {"chunk_id": {"type": "string"}},
+        "required": ["chunk_id"],
+        "additionalProperties": False,
+    },
+)
+def get_evidence(ctx: ToolContext, args: dict) -> dict:
+    import json as _json
+
+    row = ctx.conn.execute(
+        "SELECT c.id AS chunk_id, c.page, c.section_path, c.text,"
+        " d.name AS document FROM chunks c"
+        " JOIN documents d ON d.id = c.document_id"
+        " WHERE c.id = ? AND c.project_id = ?",
+        (args["chunk_id"], ctx.project_id),
+    ).fetchone()
+    if row is None:
+        return {"error": f"no evidence for {args['chunk_id']} in this project"}
+    out = dict(row)
+    out["section_path"] = _json.loads(out["section_path"] or "[]")
+    return out
+
+
 # ----------------------------------------------- artifact tools (ticket #8)
 @register(
     "list_outputs",

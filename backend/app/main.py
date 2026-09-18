@@ -47,8 +47,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_headers=["*"],
     )
 
-    from .api import (artifacts, chat, files, health, jobs, projects, search,
-                      settings as settings_api, skills)
+    from .api import (artifacts, chat, files, health, jobs, knowledge, projects,
+                      search, settings as settings_api, skills)
 
     app.include_router(health.router)
     app.include_router(projects.router)
@@ -59,6 +59,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(chat.router)
     app.include_router(skills.router)
     app.include_router(artifacts.router)
+    app.include_router(knowledge.router)
 
     from .skills import loader
 
