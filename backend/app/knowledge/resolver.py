@@ -26,49 +26,70 @@ def find_or_create_entity(
     source_document_id: str | None = None,
 ) -> tuple[str, bool]:
     """Return (entity_id, created). Matches via normalized alias; near-misses
-    are queued for review rather than merged."""
+    are queued for review rather than merged. Safe under concurrent
+    extraction workers: on a lost insert race it re-runs the lookup against
+    the other worker's committed entity."""
     norm = normalize_name(name)
     ts = now_iso()
 
+    for _attempt in range(3):
+        row = conn.execute(
+            "SELECT entity_id FROM entity_aliases WHERE project_id = ? AND norm_alias = ?",
+            (project_id, norm),
+        ).fetchone()
+        if row:
+            entity_id = row["entity_id"]
+            _add_alias(conn, entity_id, project_id, name)  # record the new spelling
+            _note_source(conn, entity_id, source_document_id)
+            conn.commit()
+            return entity_id, False
+
+        # fuzzy comparison against same-type canonical names
+        candidates = conn.execute(
+            "SELECT id, canonical_name FROM entities WHERE project_id = ? AND type = ?",
+            (project_id, etype),
+        ).fetchall()
+        best_id, best_ratio = None, 0.0
+        for cand in candidates:
+            ratio = difflib.SequenceMatcher(
+                None, norm, normalize_name(cand["canonical_name"])).ratio()
+            if ratio > best_ratio:
+                best_id, best_ratio = cand["id"], ratio
+
+        if best_id is not None and best_ratio >= AUTO_MERGE_RATIO:
+            _add_alias(conn, best_id, project_id, name)
+            _note_source(conn, best_id, source_document_id)
+            conn.commit()
+            return best_id, False
+
+        entity_id = new_id("ent")
+        try:
+            conn.execute(
+                "INSERT INTO entities (id, project_id, type, canonical_name, meta,"
+                " created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (entity_id, project_id, etype, name,
+                 json.dumps({"source_documents": [source_document_id] if source_document_id else []}),
+                 ts),
+            )
+        except sqlite3.IntegrityError:
+            # another extraction worker created this exact entity first:
+            # roll back, let the loop re-run the alias lookup against it
+            conn.rollback()
+            continue
+        _add_alias(conn, entity_id, project_id, name)
+        conn.commit()
+        if best_id is not None and best_ratio >= REVIEW_RATIO:
+            _queue_duplicate_review(conn, project_id, best_id, entity_id, best_ratio)
+        return entity_id, True
+
+    # final fallback after retries: resolve via unique natural key
     row = conn.execute(
-        "SELECT entity_id FROM entity_aliases WHERE project_id = ? AND norm_alias = ?",
-        (project_id, norm),
+        "SELECT id FROM entities WHERE project_id = ? AND type = ? AND canonical_name = ?",
+        (project_id, etype, name),
     ).fetchone()
     if row:
-        entity_id = row["entity_id"]
-        _add_alias(conn, entity_id, project_id, name)  # record the new spelling
-        _note_source(conn, entity_id, source_document_id)
-        return entity_id, False
-
-    # fuzzy comparison against same-type canonical names
-    candidates = conn.execute(
-        "SELECT id, canonical_name FROM entities WHERE project_id = ? AND type = ?",
-        (project_id, etype),
-    ).fetchall()
-    best_id, best_ratio = None, 0.0
-    for cand in candidates:
-        ratio = difflib.SequenceMatcher(
-            None, norm, normalize_name(cand["canonical_name"])).ratio()
-        if ratio > best_ratio:
-            best_id, best_ratio = cand["id"], ratio
-
-    if best_id is not None and best_ratio >= AUTO_MERGE_RATIO:
-        _add_alias(conn, best_id, project_id, name)
-        _note_source(conn, best_id, source_document_id)
-        return best_id, False
-
-    entity_id = new_id("ent")
-    conn.execute(
-        "INSERT INTO entities (id, project_id, type, canonical_name, meta, created_at)"
-        " VALUES (?, ?, ?, ?, ?, ?)",
-        (entity_id, project_id, etype, name,
-         json.dumps({"source_documents": [source_document_id] if source_document_id else []}),
-         ts),
-    )
-    _add_alias(conn, entity_id, project_id, name)
-    if best_id is not None and best_ratio >= REVIEW_RATIO:
-        _queue_duplicate_review(conn, project_id, best_id, entity_id, best_ratio)
-    return entity_id, True
+        return row["id"], False
+    raise RuntimeError(f"could not resolve entity {name!r} after retries")
 
 
 def _add_alias(conn: sqlite3.Connection, entity_id: str, project_id: str, alias: str) -> None:

@@ -13,6 +13,11 @@ interface OcrSettings {
   ocr_enabled: boolean;
   ocr_engine: string;
   engine_available: boolean;
+  docling_enabled: boolean;
+  docling_available: boolean;
+  docling_version: string | null;
+  effective_parser: string;
+  marked_stale?: number;
 }
 
 export default function SettingsPage() {
@@ -30,6 +35,22 @@ export default function SettingsPage() {
   }, []);
 
   useEffect(() => { refresh(); }, [refresh]);
+
+  async function applyProcessing(body: Record<string, unknown>) {
+    setError("");
+    setNotice("");
+    try {
+      const res = (await api.saveProcessingSettings(body)) as OcrSettings;
+      setOcr(res);
+      if (res.marked_stale) {
+        setNotice(
+          `${res.marked_stale} indexed document(s) marked stale — reprocess them ` +
+          "from the Files page to parse with the new parser.");
+      }
+    } catch (e) {
+      setError(String(e));
+    }
+  }
 
   async function save() {
     setError("");
@@ -161,15 +182,45 @@ export default function SettingsPage() {
           <h2 style={{ marginTop: 0, fontSize: 16 }}>Processing</h2>
           {ocr && (
             <>
+              <h3 style={{ fontSize: 13, margin: "12px 0 6px" }}>Document parser (PDF / DOCX / PPTX)</h3>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <input
+                  type="checkbox"
+                  style={{ width: "auto" }}
+                  checked={ocr.docling_enabled}
+                  onChange={async (e) =>
+                    applyProcessing({ docling_enabled: e.target.checked })}
+                />
+                <span style={{ flex: 1 }}>
+                  <strong>Docling</strong> — high-quality layout &amp; table parsing{" "}
+                  {ocr.docling_available ? (
+                    <span className="pill ok">
+                      ready{ocr.docling_version ? ` · v${ocr.docling_version}` : ""}
+                    </span>
+                  ) : (
+                    <span className="pill warn">not installed</span>
+                  )}
+                </span>
+              </div>
+              <div className="muted" style={{ marginTop: 4 }}>
+                {ocr.docling_available
+                  ? ocr.docling_enabled
+                    ? `Active parser: ${ocr.effective_parser}. Newly uploaded and reprocessed files use Docling.`
+                    : "Installed but disabled — the built-in parsers are used."
+                  : "To enable: install it with  pip install docling  in the backend environment, then restart. Until then the built-in lightweight parsers are used (works offline, no model downloads)."}
+              </div>
+
+              <h3 style={{ fontSize: 13, margin: "12px 0 6px" }}>OCR</h3>
               <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
                 <input type="checkbox" style={{ width: "auto" }} checked={ocr.ocr_enabled}
                        onChange={async (e) =>
-                         setOcr((await api.saveProcessingSettings({ ocr_enabled: e.target.checked })) as OcrSettings)} />
+                         applyProcessing({ ocr_enabled: e.target.checked })} />
                 <span className="muted">
                   Enable OCR for scanned documents ({ocr.ocr_engine}
                   {ocr.engine_available ? ", installed" : ", not installed on this machine"})
                 </span>
               </label>
+              {notice && <div className="ok-text" style={{ marginTop: 8 }}>{notice}</div>}
             </>
           )}
         </div>

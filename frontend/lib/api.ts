@@ -251,7 +251,7 @@ export const api = {
   testProfile: (id: string) =>
     req<Record<string, any>>(`/api/settings/llm-profiles/${id}/test`, { method: "POST" }),
   processingSettings: () => req<Record<string, any>>("/api/settings/processing"),
-  saveProcessingSettings: (body: { ocr_enabled: boolean; ocr_engine?: string }) =>
+  saveProcessingSettings: (body: Record<string, unknown>) =>
     req<Record<string, any>>("/api/settings/processing", { method: "PUT", body: JSON.stringify(body) }),
 };
 

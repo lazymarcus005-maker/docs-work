@@ -83,19 +83,27 @@ def delete_llm_profile(
 @router.get("/processing")
 def get_processing_settings(conn: sqlite3.Connection = Depends(get_db)) -> dict:
     from ..documents import ocr as ocr_mod
+    from ..documents.parser import docling_available, docling_version
+    from ..documents.pipeline import docling_enabled, effective_parser_version
 
     row = conn.execute("SELECT value FROM settings WHERE key='ocr_engine'").fetchone()
+    available = docling_available()
     return {
         "ocr_enabled": ocr_mod.ocr_enabled(conn),
         "ocr_engine": row["value"] if row else "tesseract",
         "engine_available": ocr_mod.get_ocr_provider(
             row["value"] if row else "tesseract").available(),
+        "docling_enabled": docling_enabled(conn),
+        "docling_available": available,
+        "docling_version": docling_version() if available else None,
+        "effective_parser": effective_parser_version(conn),
     }
 
 
 class ProcessingSettingsIn(BaseModel):
-    ocr_enabled: bool
+    ocr_enabled: Optional[bool] = None
     ocr_engine: str = "tesseract"
+    docling_enabled: Optional[bool] = None
 
 
 @router.put("/processing")
@@ -104,9 +112,18 @@ def put_processing_settings(
     conn: sqlite3.Connection = Depends(get_db),
 ) -> dict:
     from ..documents import ocr as ocr_mod
+    from ..documents.pipeline import mark_stale, set_docling_enabled
 
-    ocr_mod.set_ocr_enabled(conn, body.ocr_enabled, body.ocr_engine)
-    return get_processing_settings(conn)
+    if body.ocr_enabled is not None:
+        ocr_mod.set_ocr_enabled(conn, body.ocr_enabled, body.ocr_engine)
+    marked_stale = 0
+    if body.docling_enabled is not None:
+        set_docling_enabled(conn, body.docling_enabled)
+        # parser configuration changed: existing indexes may be stale (§11)
+        marked_stale = mark_stale(conn)
+    result = get_processing_settings(conn)
+    result["marked_stale"] = marked_stale
+    return result
 
 
 @router.get("/llm-profiles/{profile_id}")

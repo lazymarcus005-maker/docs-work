@@ -16,10 +16,36 @@ from .chunker import chunk_document
 EXTRACTION_VERSION = "rule-1"
 
 
+def docling_enabled(conn: sqlite3.Connection) -> bool:
+    """User preference from Settings (default: enabled — availability of the
+    package gates actual use, spec §10.1)."""
+    row = conn.execute(
+        "SELECT value FROM settings WHERE key = 'docling_enabled'"
+    ).fetchone()
+    return (row["value"] != "0") if row else True
+
+
+def set_docling_enabled(conn: sqlite3.Connection, enabled: bool) -> None:
+    conn.execute(
+        "INSERT INTO settings (key, value) VALUES ('docling_enabled', ?)"
+        " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        ("1" if enabled else "0",),
+    )
+    conn.commit()
+
+
+def effective_parser_version(conn: sqlite3.Connection) -> str:
+    from .parser import DOCLING_PARSER_VERSION, docling_available
+
+    if docling_enabled(conn) and docling_available():
+        return DOCLING_PARSER_VERSION
+    return parser_mod.PARSER_VERSION
+
+
 def mark_stale(conn: sqlite3.Connection) -> int:
     """Flag documents whose stored processing versions no longer match the
     current configuration — they will be reprocessed on demand (§11, §61)."""
-    current_parser = parser_mod.PARSER_VERSION
+    current_parser = effective_parser_version(conn)
     current_extraction = EXTRACTION_VERSION
     cur = conn.execute(
         "UPDATE documents SET status = 'STALE', updated_at = ?"
@@ -52,7 +78,9 @@ def process_document(conn: sqlite3.Connection, settings: Settings, document_id: 
     # ------------------------------------------------------------- parse
     _set_doc_status(conn, document_id, "PARSING")
     try:
-        canonical = parser_mod.parse_file(document_id, src, doc["kind"])
+        canonical = parser_mod.parse_file(
+            document_id, src, doc["kind"], use_docling=docling_enabled(conn)
+        )
     except ValueError as e:
         msg = f"{doc['name']} could not be parsed.\nReason: {e}\nActions: [Retry]"
         _set_doc_status(conn, document_id, "FAILED", error=msg)
@@ -105,7 +133,7 @@ def process_document(conn: sqlite3.Connection, settings: Settings, document_id: 
     )
     conn.execute(
         "UPDATE documents SET parser_version = ?, updated_at = ? WHERE id = ?",
-        (parser_mod.PARSER_VERSION, now_iso(), document_id),
+        (canonical.get("parser", parser_mod.PARSER_VERSION), now_iso(), document_id),
     )
     conn.commit()
     _set_doc_status(conn, document_id, "PARSED")

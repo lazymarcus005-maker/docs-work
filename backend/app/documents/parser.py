@@ -15,6 +15,27 @@ from typing import Callable
 from .canonical import canonical_document
 
 PARSER_VERSION = "builtin-1"
+DOCLING_PARSER_VERSION = "docling-1"
+
+
+def docling_available() -> bool:
+    """True when the docling package is installed (cheap check, no import)."""
+    import importlib.util
+
+    try:
+        return importlib.util.find_spec("docling") is not None
+    except (ImportError, ValueError):
+        return False
+
+
+def docling_version() -> str | None:
+    try:
+        from importlib.metadata import version
+
+        return version("docling")
+    except Exception:  # noqa: BLE001 — package metadata simply absent
+        return None
+
 
 # parsers: (suffix, kind) -> callable(bytes, filename) -> list[element dicts]
 _REGISTRY: dict[tuple[str, str], Callable] = {}
@@ -33,19 +54,26 @@ def supported_suffixes() -> set[str]:
     return {s for (s, _kind) in _REGISTRY}
 
 
-def parse_file(document_id: str, path: Path, kind: str) -> dict:
+def parse_file(document_id: str, path: Path, kind: str,
+               use_docling: bool = True) -> dict:
+    """Parse into a canonical document; the result is tagged with the parser
+    that actually ran so incremental processing can track it (§11)."""
     suffix = path.suffix.lower()
-    if kind in ("pdf", "docx", "pptx"):
+    if use_docling and docling_available() and kind in ("pdf", "docx", "pptx"):
         docling_elements = _try_docling(path)
         if docling_elements is not None:
-            return canonical_document(
+            doc = canonical_document(
                 document_id, path.name, suffix.lstrip("."), docling_elements
             )
+            doc["parser"] = DOCLING_PARSER_VERSION
+            return doc
     fn = _REGISTRY.get((suffix, kind))
     if fn is None:
         raise ValueError(f"no parser registered for {suffix} ({kind})")
     elements = fn(path.read_bytes(), path.name)
-    return canonical_document(document_id, path.name, suffix.lstrip("."), elements)
+    doc = canonical_document(document_id, path.name, suffix.lstrip("."), elements)
+    doc["parser"] = PARSER_VERSION
+    return doc
 
 
 def _try_docling(path: Path) -> list[dict] | None:
