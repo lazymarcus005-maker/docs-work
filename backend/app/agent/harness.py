@@ -293,17 +293,17 @@ def _tool_mode(req: HarnessRequest) -> str:
 
 # ------------------------------------------------------------- decisions
 def _native_decision(
-    req: HarnessRequest, messages: list[ChatMessage], tool_names: list[str]
+    req: HarnessRequest, messages: list[ChatMessage], tool_defs: list
 ) -> tuple[LLMResponse, list[str]]:
     deltas: list[str] = []
     response: LLMResponse | None = None
-    for chunk in req.client.stream(messages):
+    for chunk in req.client.stream(messages, tools=tool_defs or None):
         if "delta" in chunk:
             deltas.append(chunk["delta"])
         elif "response" in chunk:
             response = chunk["response"]
     if response is None:  # provider without streaming assembled response
-        response = req.client.complete(messages)
+        response = req.client.complete(messages, tools=tool_defs or None)
     return response, deltas
 
 

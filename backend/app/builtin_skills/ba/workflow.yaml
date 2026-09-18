@@ -1,0 +1,10 @@
+steps:
+  - understand_task
+  - collect_context
+  - analyze_sources
+  - identify_requirements
+  - identify_gaps_and_conflicts
+  - generate_or_patch_artifact
+  - validate_evidence
+  - validate_structure
+  - write_output

@@ -1,0 +1,4 @@
+{
+  "required_sections": ["Business Context", "Goals", "Requirements"],
+  "requirement_id_pattern": "\\b(REQ|NFR|FR|US)-\\d+\\b"
+}

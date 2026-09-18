@@ -22,6 +22,22 @@ def _sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
+def _explicit_prefix_skill(conn: sqlite3.Connection, message: str) -> tuple[str, str] | None:
+    """/ba create requirements → ("ba", "create requirements") when the named
+    skill exists (spec §21.1 explicit invocation)."""
+    import re
+
+    from ..skills import loader
+
+    m = re.match(r"^/([A-Za-z0-9_\-]+)\s*(.*)$", message.strip(), re.DOTALL)
+    if not m:
+        return None
+    skill_id, rest = m.group(1), m.group(2).strip()
+    if loader.get_skill(conn, skill_id) is None:
+        return None
+    return skill_id, rest or message.strip()
+
+
 def stream_turn(
     request: Request | None,
     conn: sqlite3.Connection,
@@ -36,6 +52,12 @@ def stream_turn(
     profile: dict | None,
 ) -> StreamingResponse:
     run_id = "run_pending"
+
+    # `/skill-id instruction` in the message forces explicit skill invocation
+    if skill_id is None and message:
+        explicit = _explicit_prefix_skill(conn, message)
+        if explicit:
+            skill_id, message = explicit
 
     def generate():
         nonlocal run_id

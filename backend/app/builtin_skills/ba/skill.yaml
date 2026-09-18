@@ -1,0 +1,37 @@
+id: ba
+name: Business Analyst
+version: 1.0.0
+builtin: true
+enabled_by_default: true
+
+description: >
+  Analyze project evidence and generate evidence-backed BA artifacts
+  such as requirements, user stories, and clarification questions.
+
+inputs:
+  - project_context
+  - user_instruction
+  - selected_files
+  - current_artifact
+
+outputs:
+  - markdown_artifact
+
+tools:
+  - list_project_files
+  - search_project
+  - search_chunks
+  - read_document
+  - query_graph
+  - get_evidence
+  - read_artifact
+  - write_artifact
+  - update_artifact
+  - run_validator
+
+rules:
+  - never_invent_missing_information
+  - prefer_project_terminology
+  - cite_evidence_for_critical_claims
+  - identify_conflicts
+  - preserve_user_edits
