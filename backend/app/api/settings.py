@@ -126,6 +126,31 @@ def put_processing_settings(
     return result
 
 
+@router.get("/limits")
+def get_limits(conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    from ..agent import spend
+
+    return spend.limits_status(conn)
+
+
+class LimitsIn(BaseModel):
+    daily_token_budget: Optional[int] = None
+    kill_switch: Optional[bool] = None
+
+
+@router.put("/limits")
+def put_limits(
+    body: LimitsIn, conn: sqlite3.Connection = Depends(get_db)
+) -> dict:
+    from ..agent import spend
+
+    if body.daily_token_budget is not None:
+        spend.set_daily_budget(conn, body.daily_token_budget)
+    if body.kill_switch is not None:
+        spend.set_kill_switch(conn, body.kill_switch)
+    return spend.limits_status(conn)
+
+
 @router.get("/llm-profiles/{profile_id}")
 def get_llm_profile(
     profile_id: str, conn: sqlite3.Connection = Depends(get_db)

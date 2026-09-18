@@ -108,7 +108,7 @@ def _seed_knowledge(db_path):
     conn = db.connect(db_path)
     db.init_db(conn)
     ts = "2026-01-01T00:00:00+00:00"
-    conn.execute("INSERT INTO projects VALUES ('prj_k', 'K', '', '', 'ACTIVE', ?, ?)", (ts, ts))
+    conn.execute("INSERT INTO projects (id, name, description, instruction, status, created_at, updated_at, autonomy_level) VALUES ('prj_k', 'K', '', '', 'ACTIVE', ?, ?, 2)", (ts, ts))
     for did, name in (("doc_a", "a.txt"), ("doc_b", "b.txt")):
         conn.execute(
             "INSERT INTO documents (id, project_id, name, stored_name, media_type,"

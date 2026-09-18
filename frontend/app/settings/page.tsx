@@ -26,12 +26,18 @@ export default function SettingsPage() {
   const [editing, setEditing] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<Record<string, any> | null>(null);
   const [ocr, setOcr] = useState<OcrSettings | null>(null);
+  const [limits, setLimits] = useState<Record<string, any> | null>(null);
+  const [budgetDraft, setBudgetDraft] = useState<string>("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
   const refresh = useCallback(() => {
     api.profiles().then((r) => setProfiles(r.profiles)).catch((e) => setError(String(e)));
     api.processingSettings().then((r) => setOcr(r as OcrSettings)).catch(() => {});
+    api.limits().then((r) => {
+      setLimits(r);
+      setBudgetDraft(String(r.daily_token_budget ?? 0));
+    }).catch(() => {});
   }, []);
 
   useEffect(() => { refresh(); }, [refresh]);
@@ -176,6 +182,43 @@ export default function SettingsPage() {
           )}
           {notice && <div className="ok-text" style={{ marginTop: 8 }}>{notice}</div>}
           {error && <div className="error-text" style={{ marginTop: 8 }}>{error}</div>}
+        </div>
+
+        <div className="card">
+          <h2 style={{ marginTop: 0, fontSize: 16 }}>Agent Limits</h2>
+          {limits && (
+            <>
+              <div className="muted" style={{ marginBottom: 8 }}>
+                Tokens used today: <strong>{limits.tokens_used_today.toLocaleString()}</strong>
+                {limits.daily_token_budget > 0 &&
+                  ` / ${limits.daily_token_budget.toLocaleString()} budget`}
+                {limits.daily_token_budget === 0 && " (no daily cap)"}
+              </div>
+              <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                <label className="field" style={{ margin: 0, width: 220 }}>
+                  <span>Daily token budget (0 = unlimited)</span>
+                  <input type="number" defaultValue={limits.daily_token_budget} min={0}
+                         onChange={(e) => setBudgetDraft(e.target.value)} />
+                </label>
+                <button className="btn secondary" style={{ marginTop: 16 }}
+                        onClick={async () => setLimits(await api.saveLimits({
+                          daily_token_budget: Number(budgetDraft || 0)}))}>
+                  Save budget
+                </button>
+                <button className={limits.kill_switch ? "btn danger" : "btn"}
+                        style={{ marginTop: 16 }}
+                        onClick={async () =>
+                          setLimits(await api.saveLimits({ kill_switch: !limits.kill_switch }))}>
+                  {limits.kill_switch ? "▶ Resume agent runs" : "⏸ Kill switch: pause agent runs"}
+                </button>
+              </div>
+              {limits.kill_switch && (
+                <div className="error-text" style={{ marginTop: 8 }}>
+                  Kill switch is ACTIVE — agent runs are refused until resumed.
+                </div>
+              )}
+            </>
+          )}
         </div>
 
         <div className="card">

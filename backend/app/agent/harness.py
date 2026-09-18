@@ -24,7 +24,7 @@ from typing import Any, Iterator
 from ..config import Settings
 from ..llm.base import ChatMessage, LLMClient, LLMResponse, ToolCall
 from ..util import log_event
-from . import run_state, tools as tools_mod
+from . import run_state, spend, tools as tools_mod
 from .compaction import (compact_messages, context_usage, should_compact,
                          truncate_text, working_budget)
 from .context import build_context_pack, document_ids_for_files, render_context_block
@@ -94,6 +94,8 @@ class HarnessRequest:
         self.keep_recent = keep_recent
         self.observation_char_cap = observation_char_cap
         self.observed_prompt_tokens: int | None = None
+        self.total_prompt_tokens = 0
+        self.total_completion_tokens = 0
 
 
 def _sse_pair(event: str, data: dict):
@@ -199,6 +201,10 @@ class NativeHarness:
             while True:
                 if req.cancel_event.is_set():
                     raise StopRun("cancelled")
+                if spend.kill_switch_active(conn):
+                    raise StopRun("kill_switch")
+                if spend.budget_exceeded(conn):
+                    raise StopRun("daily_budget")
                 if iterations >= req.max_iterations:
                     raise StopRun("max_iterations")
                 if tool_calls_total >= req.max_tool_calls:
@@ -243,8 +249,16 @@ class NativeHarness:
                     response, deltas = prompt_json_decision(req, messages, tool_defs)
                 else:
                     response, deltas = native_decision(req, messages, tool_defs)
-                if response.prompt_tokens:
-                    req.observed_prompt_tokens = response.prompt_tokens
+                if response.prompt_tokens or response.completion_tokens:
+                    req.total_prompt_tokens += response.prompt_tokens or 0
+                    req.total_completion_tokens += response.completion_tokens or 0
+                    req.observed_prompt_tokens = max(
+                        req.observed_prompt_tokens or 0,
+                        response.prompt_tokens or 0)
+                    run_state.update_run(
+                        conn, run_id,
+                        prompt_tokens=req.total_prompt_tokens,
+                        completion_tokens=req.total_completion_tokens)
 
                 if response.has_tool_calls:
                     for tc in response.tool_calls:
@@ -272,6 +286,21 @@ class NativeHarness:
                 status, error_code = "WAITING_USER", None
                 final_text = e.data or ""
                 yield _sse_pair("run.waiting_user", {"run_id": run_id})
+            elif e.reason == "kill_switch":
+                status, error_code = "FAILED", "kill_switch"
+                yield _sse_pair("run.failed", {
+                    "run_id": run_id,
+                    "message": "The agent kill switch is active, so runs are paused.",
+                    "actions": ["Turn the kill switch off in Settings → Agent limits"],
+                })
+            elif e.reason == "daily_budget":
+                status, error_code = "FAILED", "daily_budget"
+                yield _sse_pair("run.failed", {
+                    "run_id": run_id,
+                    "message": "The daily token budget for agent runs is exhausted.",
+                    "actions": ["Raise or clear the daily budget in Settings → Agent limits",
+                                "Wait until tomorrow (usage resets daily)"],
+                })
             else:
                 status, error_code = "FAILED", e.reason
                 yield _sse_pair("run.failed", {
@@ -285,8 +314,16 @@ class NativeHarness:
 
         run_state.update_run(
             conn, run_id, status=status, error_code=error_code,
-            tool_call_count=tool_calls_total, completed_at=_now(),
+            tool_call_count=tool_calls_total,
+            prompt_tokens=req.total_prompt_tokens,
+            completion_tokens=req.total_completion_tokens,
+            completed_at=_now(),
         )
+        try:
+            spend.record_usage(conn, req.total_prompt_tokens,
+                               req.total_completion_tokens)
+        except Exception:  # noqa: BLE001 — accounting must not break runs
+            pass
         log_event(conn, f"agent.run.{status.lower()}",
                   project_id, {"run_id": run_id})
         conn.commit()
@@ -300,6 +337,8 @@ class NativeHarness:
             "evidence_refs": evidence_refs,
             "iterations": iterations,
             "tool_calls": tool_calls_total,
+            "prompt_tokens": req.total_prompt_tokens,
+            "completion_tokens": req.total_completion_tokens,
         })
 
 

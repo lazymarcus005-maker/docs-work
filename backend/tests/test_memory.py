@@ -73,7 +73,7 @@ def test_memory_injected_into_agent_system_prompt_and_isolated(client):
 
     # a second project's memory must not leak (NFR-006)
     conn.execute(
-        "INSERT INTO projects VALUES ('prj_other', 'O', '', '', 'ACTIVE', 't', 't')")
+        "INSERT INTO projects (id, name, description, instruction, status, created_at, updated_at, autonomy_level) VALUES ('prj_other', 'O', '', '', 'ACTIVE', 't', 't', 2)")
     memory.create_memory(conn, "prj_other", "Other project secret memory.")
 
     script = [resp(content="ok, noted the convention.")]

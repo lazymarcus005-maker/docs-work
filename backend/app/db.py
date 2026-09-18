@@ -323,4 +323,26 @@ def connect(db_path: Path | str) -> sqlite3.Connection:
 
 def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
+    _ensure_columns(conn)
     conn.commit()
+
+
+def _ensure_columns(conn: sqlite3.Connection) -> None:
+    """Lightweight migrations: add columns that post-date a user's existing
+    database (CREATE TABLE IF NOT EXISTS won't touch existing tables)."""
+    migrations = {
+        "projects": {"autonomy_level": "INTEGER NOT NULL DEFAULT 2"},
+        "agent_runs": {
+            "prompt_tokens": "INTEGER NOT NULL DEFAULT 0",
+            "completion_tokens": "INTEGER NOT NULL DEFAULT 0",
+        },
+    }
+    for table, columns in migrations.items():
+        existing = {
+            r["name"] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()
+        }
+        if not existing:
+            continue
+        for column, decl in columns.items():
+            if column not in existing:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")

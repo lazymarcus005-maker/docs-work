@@ -7,6 +7,7 @@ export interface Project {
   instruction: string;
   status: string;
   created_at: string;
+  autonomy_level?: number;
   file_count?: number;
   ready_count?: number;
 }
@@ -142,6 +143,8 @@ export const api = {
   createProject: (body: { name: string; description?: string; instruction?: string }) =>
     req<Project>("/api/projects", { method: "POST", body: JSON.stringify(body) }),
   getProject: (id: string) => req<Project>(`/api/projects/${id}`),
+  updateProject: (id: string, body: { autonomy_level?: number }) =>
+    req<Project>(`/api/projects/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
   deleteProject: (id: string) => req<void>(`/api/projects/${id}`, { method: "DELETE" }),
 
   // files
@@ -200,6 +203,8 @@ export const api = {
     req<ArtifactDetail>(`/api/projects/${pid}/artifacts/${aid}`, { method: "PUT", body: JSON.stringify({ content }) }),
   artifactEvidence: (pid: string, aid: string) =>
     req<{ citations: Evidence[]; unresolved: { chunk_id: string }[] }>(`/api/projects/${pid}/artifacts/${aid}/evidence`),
+  approveArtifact: (pid: string, aid: string) =>
+    req<ArtifactDetail>(`/api/projects/${pid}/artifacts/${aid}/approve`, { method: "POST" }),
 
   // skills
   projectSkills: (pid: string) => req<{ skills: Skill[] }>(`/api/projects/${pid}/skills`),
@@ -253,6 +258,9 @@ export const api = {
   processingSettings: () => req<Record<string, any>>("/api/settings/processing"),
   saveProcessingSettings: (body: Record<string, unknown>) =>
     req<Record<string, any>>("/api/settings/processing", { method: "PUT", body: JSON.stringify(body) }),
+  limits: () => req<Record<string, any>>("/api/settings/limits"),
+  saveLimits: (body: { daily_token_budget?: number; kill_switch?: boolean }) =>
+    req<Record<string, any>>("/api/settings/limits", { method: "PUT", body: JSON.stringify(body) }),
 };
 
 export async function consumeSSE(body: ReadableStream<Uint8Array>, onEvent: (e: RunEvent) => void) {

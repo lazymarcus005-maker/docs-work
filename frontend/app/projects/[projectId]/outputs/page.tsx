@@ -55,6 +55,7 @@ export default function OutputsPage() {
                 <span className="pill">v{a.current_version}</span>
                 {a.validation_status === "passed" && <span className="pill ok">validated</span>}
                 {a.validation_status === "failed" && <span className="pill warn">validation failed</span>}
+                {a.validation_status === "proposed" && <span className="pill warn">proposed — needs approval</span>}
                 {a.skill_id && <span className="muted">by {a.skill_id}</span>}
               </li>
             ))}
@@ -84,7 +85,17 @@ export default function OutputsPage() {
                         value={content}
                         onChange={(e) => { setContent(e.target.value); setDirty(true); }} />
               <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
-                <button className="btn" onClick={save} disabled={!dirty}>Save as new version</button>
+                {selected.validation_status === "proposed" ? (
+                  <button className="btn" onClick={async () => {
+                    const d = await api.approveArtifact(pid, selected.id);
+                    setSelected(d);
+                    const c = await api.artifactContent(pid, selected.id);
+                    setContent(c.content);
+                    refresh();
+                  }}>Approve (L1)</button>
+                ) : (
+                  <button className="btn" onClick={save} disabled={!dirty}>Save as new version</button>
+                )}
                 <button className="btn secondary" onClick={async () => {
                   setEvidence(await api.artifactEvidence(pid, selected.id));
                 }}>View Evidence</button>

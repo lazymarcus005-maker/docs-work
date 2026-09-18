@@ -36,6 +36,18 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
       <header className="topbar">
         <Link href="/">← Projects</Link>
         <span className="brand">{project?.name || "…"}</span>
+        <select
+          aria-label="Autonomy level"
+          style={{ width: "auto", fontSize: 12 }}
+          value={project?.autonomy_level ?? 2}
+          onChange={async (e) => {
+            const level = Number(e.target.value);
+            setProject(await api.updateProject(pid, { autonomy_level: level }));
+          }}>
+          <option value={1}>L1 · propose (needs approval)</option>
+          <option value={2}>L2 · assisted</option>
+          <option value={3}>L3 · autonomous</option>
+        </select>
         <span style={{ flex: 1 }} />
         <Link href={`/projects/${pid}/files`} className="muted">Processing</Link>
         <Link href="/settings" className="muted">Settings</Link>

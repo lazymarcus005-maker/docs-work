@@ -14,6 +14,7 @@ from ..artifacts import manager
 from ..config import Settings
 from ..deps import get_app_settings, get_db
 from ..storage import filesystem as fs
+from ..util import now_iso
 from .projects import require_project
 
 router = APIRouter(prefix="/api/projects/{project_id}/artifacts", tags=["artifacts"])
@@ -41,6 +42,32 @@ def get_artifact(
     project_id: str, artifact_id: str, conn: sqlite3.Connection = Depends(get_db)
 ) -> dict:
     require_project(conn, project_id)
+    return _artifact(conn, project_id, artifact_id)
+
+
+@router.post("/{artifact_id}/approve")
+def approve_artifact(
+    project_id: str,
+    artifact_id: str,
+    conn: sqlite3.Connection = Depends(get_db),
+) -> dict:
+    """Autonomy L1: user approves a proposed artifact (spec §19 gate)."""
+    require_project(conn, project_id)
+    artifact = _artifact(conn, project_id, artifact_id)
+    if artifact["validation_status"] != "proposed":
+        raise HTTPException(status_code=409,
+                            detail="Artifact is not awaiting approval")
+    conn.execute(
+        "UPDATE artifacts SET validation_status = 'unverified', updated_at = ?"
+        " WHERE id = ?", (__import__("app.util", fromlist=["now_iso"]).now_iso(), artifact_id))
+    conn.execute(
+        "UPDATE review_items SET status = 'resolved', resolved_at = ?"
+        " WHERE project_id = ? AND kind = 'artifact_approval'"
+        " AND status = 'open' AND payload LIKE ?",
+        (__import__("app.util", fromlist=["now_iso"]).now_iso(), project_id,
+         f"%{artifact_id}%"),
+    )
+    conn.commit()
     return _artifact(conn, project_id, artifact_id)
 
 

@@ -37,7 +37,7 @@ def test_resolution_normalizes_aliases_to_one_entity():
     settings = Settings(env={"COWORK_DATA_DIR": tempfile.mkdtemp()})
     conn = db.connect(settings.db_path)
     db.init_db(conn)
-    conn.execute("INSERT INTO projects VALUES ('p', 'P', '', '', 'ACTIVE', 't', 't')")
+    conn.execute("INSERT INTO projects (id, name, description, instruction, status, created_at, updated_at, autonomy_level) VALUES ('p', 'P', '', '', 'ACTIVE', 't', 't', 2)")
 
     ids = set()
     for alias in ("cxgateway", "CX Gateway", "CXGateway", "cx-gateway"):
@@ -58,7 +58,7 @@ def test_weak_similarity_becomes_review_item_not_merge():
     settings = Settings(env={"COWORK_DATA_DIR": tempfile.mkdtemp()})
     conn = db.connect(settings.db_path)
     db.init_db(conn)
-    conn.execute("INSERT INTO projects VALUES ('p', 'P', '', '', 'ACTIVE', 't', 't')")
+    conn.execute("INSERT INTO projects (id, name, description, instruction, status, created_at, updated_at, autonomy_level) VALUES ('p', 'P', '', '', 'ACTIVE', 't', 't', 2)")
 
     a, _ = find_or_create_entity(conn, "p", "ReportingService", "Service")
     b, _ = find_or_create_entity(conn, "p", "ReportingServcies", "Service")  # weak match
@@ -75,7 +75,7 @@ def test_merge_entities_folds_aliases_and_relations():
     settings = Settings(env={"COWORK_DATA_DIR": tempfile.mkdtemp()})
     conn = db.connect(settings.db_path)
     db.init_db(conn)
-    conn.execute("INSERT INTO projects VALUES ('p', 'P', '', '', 'ACTIVE', 't', 't')")
+    conn.execute("INSERT INTO projects (id, name, description, instruction, status, created_at, updated_at, autonomy_level) VALUES ('p', 'P', '', '', 'ACTIVE', 't', 't', 2)")
     a, _ = find_or_create_entity(conn, "p", "PaymentService", "Service")
     c, _ = find_or_create_entity(conn, "p", "Ledger", "Service")
     # a separate duplicate entity (as a review-item merge would have)

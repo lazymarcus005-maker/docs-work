@@ -29,7 +29,7 @@ def test_interrupted_runs_get_terminal_state_on_restart(settings):
     conn = db.connect(settings.db_path)
     db.init_db(conn)
     ts = "2026-01-01T00:00:00+00:00"
-    conn.execute("INSERT INTO projects VALUES ('prj_r', 'R', '', '', 'ACTIVE', ?, ?)", (ts, ts))
+    conn.execute("INSERT INTO projects (id, name, description, instruction, status, created_at, updated_at, autonomy_level) VALUES ('prj_r', 'R', '', '', 'ACTIVE', ?, ?, 2)", (ts, ts))
     conn.execute(
         "INSERT INTO agent_runs (id, project_id, status, started_at, updated_at)"
         " VALUES ('run_zombie', 'prj_r', 'RUNNING', ?, ?)", (ts, ts))
@@ -55,7 +55,7 @@ def _doc_and_chunk(settings, text):
     conn = db.connect(settings.db_path)
     db.init_db(conn)
     conn.execute(
-        "INSERT INTO projects VALUES ('prj_1', 'P', '', '', 'ACTIVE', 't', 't')")
+        "INSERT INTO projects (id, name, description, instruction, status, created_at, updated_at, autonomy_level) VALUES ('prj_1', 'P', '', '', 'ACTIVE', 't', 't', 2)")
     _doc(conn, "prj_1", "a.txt", doc_id="doc_1")
     _chunk(conn, "prj_1", "doc_1", "chk_0001", text)
     return conn

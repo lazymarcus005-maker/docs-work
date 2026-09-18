@@ -29,6 +29,21 @@ class ProjectPatch(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     instruction: Optional[str] = None
+    autonomy_level: Optional[int] = None
+
+
+AUTONOMY_LEVELS = {
+    1: "propose — artifact writes need user approval",
+    2: "assisted — agent writes, validation failures escalate",
+    3: "autonomous — full auto within project isolation",
+}
+
+
+def get_autonomy_level(conn: sqlite3.Connection, project_id: str) -> int:
+    row = conn.execute(
+        "SELECT autonomy_level FROM projects WHERE id = ?", (project_id,)
+    ).fetchone()
+    return row["autonomy_level"] if row and row["autonomy_level"] else 2
 
 
 def get_project(conn: sqlite3.Connection, project_id: str) -> dict[str, Any]:
@@ -124,6 +139,10 @@ def update_project(
     fields = {k: v for k, v in body.model_dump().items() if v is not None}
     if "name" in fields and not fields["name"].strip():
         raise HTTPException(status_code=422, detail="Project name is required")
+    if "autonomy_level" in fields and fields["autonomy_level"] not in AUTONOMY_LEVELS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"autonomy_level must be one of: {sorted(AUTONOMY_LEVELS)}")
     if fields:
         sets = ", ".join(f"{k} = ?" for k in fields)
         conn.execute(

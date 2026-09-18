@@ -17,6 +17,12 @@ from app.llm.base import ChatMessage, LLMResponse, ToolCall
 TS = "2026-01-01T00:00:00+00:00"
 
 
+def named_projects_insert():
+    return ("INSERT INTO projects (id, name, description, instruction, status,"
+            " created_at, updated_at, autonomy_level)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+
+
 def _doc(conn, pid, name, kind="text", doc_id=None):
     doc_id = doc_id or f"doc_{name}"
     conn.execute(
@@ -80,7 +86,7 @@ def test_tool_isolation_between_projects(settings):
     db.init_db(conn)
     ts = "2026-01-01"
     for pid in ("prj_a", "prj_b"):
-        conn.execute("INSERT INTO projects VALUES (?, ?, '', '', 'ACTIVE', ?, ?)", (pid, pid, ts, ts))
+        conn.execute("INSERT INTO projects (id, name, description, instruction, status, created_at, updated_at, autonomy_level) VALUES (?, ?, '', '', 'ACTIVE', ?, ?, 2)", (pid, pid, ts, ts))
     for pid, text in (("prj_a", "alpha secret sauce"), ("prj_b", "beta confidential data")):
         did = _doc(conn, pid, f"{pid}.txt")
         _chunk(conn, pid, did, f"chk_{pid}", text)
@@ -105,7 +111,7 @@ def test_context_pack_budget_and_selection(settings):
     db.init_db(conn)
     ts = "2026-01-01"
     pid = "prj_ctx"
-    conn.execute("INSERT INTO projects VALUES (?, 'P', '', '', 'ACTIVE', ?, ?)", (pid, ts, ts))
+    conn.execute(named_projects_insert(), (pid, "P", "", "", "ACTIVE", ts, ts, 2))
     _doc(conn, pid, "big.txt", doc_id="doc_1")
     _doc(conn, pid, "other.txt", doc_id="doc_2")
     for i in range(1, 8):
@@ -132,7 +138,7 @@ def _seed_project(settings, with_content=True):
     conn = db.connect(settings.db_path)
     db.init_db(conn)
     ts = "2026-01-01"
-    conn.execute("INSERT INTO projects VALUES (?, 'CX', 'Use evidence only.', 'instr', 'ACTIVE', ?, ?)",
+    conn.execute("INSERT INTO projects (id, name, description, instruction, status, created_at, updated_at, autonomy_level) VALUES (?, 'CX', 'Use evidence only.', 'instr', 'ACTIVE', ?, ?, 2)",
                  ("prj_1", ts, ts))
     if with_content:
         _doc(conn, "prj_1", "SRS.docx", kind="docx", doc_id="doc_1")
