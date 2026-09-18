@@ -16,6 +16,20 @@ from .chunker import chunk_document
 EXTRACTION_VERSION = "rule-1"
 
 
+def mark_stale(conn: sqlite3.Connection) -> int:
+    """Flag documents whose stored processing versions no longer match the
+    current configuration — they will be reprocessed on demand (§11, §61)."""
+    current_parser = parser_mod.PARSER_VERSION
+    current_extraction = EXTRACTION_VERSION
+    cur = conn.execute(
+        "UPDATE documents SET status = 'STALE', updated_at = ?"
+        " WHERE status = 'READY' AND (parser_version != ? OR extraction_version != ?)",
+        (now_iso(), current_parser, current_extraction),
+    )
+    conn.commit()
+    return cur.rowcount
+
+
 def _set_doc_status(conn: sqlite3.Connection, doc_id: str, status: str,
                     error: str | None = None) -> None:
     conn.execute(

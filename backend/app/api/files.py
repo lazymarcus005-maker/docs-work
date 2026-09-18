@@ -114,24 +114,46 @@ def upload_files(
     ts = now_iso()
     for upload in files:
         info = _store_upload(settings, project_id, upload)
+
+        # incremental processing (§11, FR-004): same name + same hash →
+        # reuse the existing result, no jobs enqueued
+        existing = conn.execute(
+            "SELECT id, status FROM documents WHERE project_id = ? AND name = ?",
+            (project_id, info["safe_name"]),
+        ).fetchone()
+        if existing is not None:
+            same = conn.execute(
+                "SELECT content_hash FROM documents WHERE id = ?",
+                (existing["id"],),
+            ).fetchone()["content_hash"]
+            if same == info["sha256"]:
+                (fs.context_dir(settings.workspace_root, project_id)
+                 / info["stored_name"]).unlink(missing_ok=True)  # drop duplicate copy
+                out.append({"file_id": existing["id"], "name": info["safe_name"],
+                            "status": existing["status"], "reused": True})
+                continue
+
         fid = new_id("file")
-        conn.execute(
-            "INSERT INTO documents (id, project_id, name, stored_name, media_type,"
-            " kind, size_bytes, content_hash, status, created_at, updated_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'NEW', ?, ?)",
-            (
-                fid,
-                project_id,
-                info["safe_name"],
-                info["stored_name"],
-                upload.content_type or "",
-                info["kind"],
-                info["size"],
-                info["sha256"],
-                ts,
-                ts,
-            ),
-        )
+        if existing is not None:
+            # changed content under the same name: replace in place, reparse
+            # only this source (Scenario G)
+            fid = existing["id"]
+            conn.execute(
+                "UPDATE documents SET stored_name = ?, content_hash = ?,"
+                " status = 'NEW', error = NULL, updated_at = ? WHERE id = ?",
+                (info["stored_name"], info["sha256"], ts, fid),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO documents (id, project_id, name, stored_name, media_type,"
+                " kind, size_bytes, content_hash, status, created_at, updated_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'NEW', ?, ?)",
+                (
+                    fid, project_id, info["safe_name"], info["stored_name"],
+                    upload.content_type or "", info["kind"], info["size"],
+                    info["sha256"], ts, ts,
+                ),
+            )
         conn.execute(
             "INSERT INTO document_versions (id, document_id, content_hash,"
             " stored_name, created_at) VALUES (?, ?, ?, ?, ?)",
@@ -177,6 +199,24 @@ def file_content(
     if not path.exists():
         raise HTTPException(status_code=404, detail="Stored file missing on disk")
     return FileResponse(path, filename=doc["name"])
+
+
+@router.post("/{document_id}/reprocess", status_code=202)
+def reprocess_file(
+    project_id: str,
+    document_id: str,
+    conn: sqlite3.Connection = Depends(get_db),
+) -> dict:
+    """Manual retry / reindex of a single source (§43, §57)."""
+    get_document(conn, project_id, document_id)
+    conn.execute(
+        "UPDATE documents SET status = 'NEW', error = NULL, updated_at = ? WHERE id = ?",
+        (now_iso(), document_id),
+    )
+    job = queue.enqueue(conn, project_id, "PARSE_DOCUMENT",
+                        document_id=document_id, priority=queue.PRIORITY_PARSE)
+    conn.commit()
+    return {"file_id": document_id, "job_id": job}
 
 
 @router.delete("/{document_id}", status_code=204)

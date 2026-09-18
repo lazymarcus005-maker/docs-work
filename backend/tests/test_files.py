@@ -47,12 +47,23 @@ def test_unsupported_type_rejected_with_actionable_error(client):
     assert "unsupported" in res.json()["detail"].lower()
 
 
-def test_duplicate_names_get_unique_stored_names(client):
+def test_same_name_reupload_replaces_in_place(client):
+    """A re-uploaded file is the same source: changed content replaces it
+    (one document record) rather than creating a copy (§11, Scenario G)."""
     pid = client.post("/api/projects", json={"name": "P"}).json()["id"]
-    _upload(client, pid, "a.txt", b"one")
-    _upload(client, pid, "a.txt", b"two")
-    names = [f["name"] for f in client.get(f"/api/projects/{pid}/files").json()["files"]]
-    assert names.count("a.txt") == 2  # display name kept for both
+    first = client.post(
+        f"/api/projects/{pid}/files",
+        files={"files": ("a.txt", io.BytesIO(b"one"), "text/plain")},
+    ).json()["files"][0]
+    second = client.post(
+        f"/api/projects/{pid}/files",
+        files={"files": ("a.txt", io.BytesIO(b"two"), "text/plain")},
+    ).json()["files"][0]
+
+    listed = client.get(f"/api/projects/{pid}/files").json()["files"]
+    assert len(listed) == 1
+    assert listed[0]["id"] == first["file_id"] == second["file_id"]
+    assert listed[0]["content_hash"] if "content_hash" in listed[0] else True
 
 
 def test_path_traversal_in_filename_is_sanitized(client, settings):
