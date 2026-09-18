@@ -25,7 +25,7 @@ from ..config import Settings
 from ..llm.base import ChatMessage, LLMClient, LLMResponse, ToolCall
 from ..util import log_event
 from . import run_state, tools as tools_mod
-from .context import build_context_pack, render_context_block
+from .context import build_context_pack, document_ids_for_files, render_context_block
 from .tools import ToolContext
 
 CHUNK_ID_RE = re.compile(r"\bchk_[A-Za-z0-9_]+")
@@ -65,6 +65,7 @@ class HarnessRequest:
         max_iterations: int = 12,
         max_tool_calls: int = 24,
         timeout_seconds: int = 300,
+        max_context_tokens: int | None = None,
     ) -> None:
         self.conn = conn
         self.settings = settings
@@ -79,6 +80,7 @@ class HarnessRequest:
         self.max_iterations = max_iterations
         self.max_tool_calls = max_tool_calls
         self.timeout_seconds = timeout_seconds
+        self.max_context_tokens = max_context_tokens  # §19.1 stop control
 
 
 def _sse_pair(event: str, data: dict):
@@ -105,9 +107,7 @@ class NativeHarness:
         started = time.monotonic()
         tool_ctx = ToolContext(
             conn, req.settings, project_id,
-            selected_document_ids=[
-                d for d in (_resolve_doc_id(conn, project_id, f) for f in req.selected_files) if d
-            ],
+            selected_document_ids=document_ids_for_files(conn, project_id, req.selected_files),
         )
         tool_names = [t.name for t in tools_mod.get_tools()] + ["ask_user", "run_skill"]
 
@@ -184,15 +184,17 @@ class NativeHarness:
                     raise StopRun("max_iterations")
                 if tool_calls_total >= req.max_tool_calls:
                     raise StopRun("max_tool_calls")
+                if req.max_context_tokens and _approx_messages_tokens(messages) > req.max_context_tokens:
+                    raise StopRun("max_context_tokens")
                 if time.monotonic() - started > req.timeout_seconds:
                     raise StopRun("run_timeout")
                 iterations += 1
                 run_state.update_run(conn, run_id, iteration_count=iterations)
 
                 if mode == "prompt-json":
-                    response, deltas = _prompt_json_decision(req, messages, tool_defs)
+                    response, deltas = prompt_json_decision(req, messages, tool_defs)
                 else:
-                    response, deltas = _native_decision(req, messages, tool_defs)
+                    response, deltas = native_decision(req, messages, tool_defs)
 
                 if response.has_tool_calls:
                     for tc in response.tool_calls:
@@ -257,6 +259,12 @@ def _now() -> str:
     return now_iso()
 
 
+def _approx_messages_tokens(messages: list[ChatMessage]) -> int:
+    """~4 chars per token heuristic; tool observations dominate run context."""
+    chars = sum(len(m.content or "") for m in messages)
+    return chars // 4
+
+
 def _global_instruction(conn: sqlite3.Connection) -> str:
     row = conn.execute(
         "SELECT value FROM settings WHERE key = 'global_instruction'"
@@ -276,14 +284,6 @@ def _session_history(conn: sqlite3.Connection, session_id: str, limit: int = 10)
     return [ChatMessage(role=r["role"], content=r["content"]) for r in rows[:-1]]
 
 
-def _resolve_doc_id(conn: sqlite3.Connection, project_id: str, name_or_id: str) -> str | None:
-    row = conn.execute(
-        "SELECT id FROM documents WHERE project_id = ? AND (name = ? OR id = ?)",
-        (project_id, name_or_id, name_or_id),
-    ).fetchone()
-    return row["id"] if row else None
-
-
 def _tool_mode(req: HarnessRequest) -> str:
     profile_mode = getattr(req.client, "tool_calling_mode", "auto")
     if profile_mode in ("native", "prompt-json"):
@@ -292,7 +292,7 @@ def _tool_mode(req: HarnessRequest) -> str:
 
 
 # ------------------------------------------------------------- decisions
-def _native_decision(
+def native_decision(
     req: HarnessRequest, messages: list[ChatMessage], tool_defs: list
 ) -> tuple[LLMResponse, list[str]]:
     deltas: list[str] = []
@@ -315,7 +315,7 @@ PROMPT_JSON_INSTRUCTION = (
 )
 
 
-def _prompt_json_decision(
+def prompt_json_decision(
     req: HarnessRequest, messages: list[ChatMessage], tool_names: list[str]
 ) -> tuple[LLMResponse, list[str]]:
     import jsonschema

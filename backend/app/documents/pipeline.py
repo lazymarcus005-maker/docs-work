@@ -69,15 +69,13 @@ def process_document(conn: sqlite3.Connection, settings: Settings, document_id: 
     if needs_ocr:
         from . import ocr as ocr_mod
 
+        engine_row = conn.execute(
+            "SELECT value FROM settings WHERE key='ocr_engine'").fetchone()
+        engine = engine_row["value"] if engine_row else "tesseract"
         if ocr_mod.ocr_enabled(conn):
             # §34: OCR activates only when needed; run it and re-parse the text
             try:
-                ocr_text = ocr_mod.ocr_document(
-                    src,
-                    conn.execute("SELECT value FROM settings WHERE key='ocr_engine'").fetchone()
-                    and conn.execute("SELECT value FROM settings WHERE key='ocr_engine'").fetchone()["value"]
-                    or "tesseract",
-                )
+                ocr_text = ocr_mod.ocr_document(src, engine)
             except ocr_mod.OCRError as e:
                 msg = f"{doc['name']} could not be parsed.\nReason: {e}"
                 _set_doc_status(conn, document_id, "FAILED", error=msg)

@@ -44,8 +44,9 @@ class Settings:
             env.get("COWORK_HARNESS_RUN_TIMEOUT", "300")
         )
 
-        # Context manager default budget (chars; ~4 chars per token heuristic)
-        self.context_char_budget = int(env.get("COWORK_CONTEXT_CHAR_BUDGET", "48000"))
+        # Context manager default budget (§18). Specified in tokens (~4 chars
+        # per token heuristic) so the limit is comparable across models.
+        self.context_token_budget = int(env.get("COWORK_CONTEXT_TOKEN_BUDGET", "12000"))
 
         # Observability (spec §42). Debug mode may include payload excerpts.
         self.log_level = env.get("COWORK_LOG_LEVEL", "INFO")

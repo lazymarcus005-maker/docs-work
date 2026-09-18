@@ -92,6 +92,7 @@ def stream_turn(
                 max_iterations=settings.harness_max_iterations,
                 max_tool_calls=settings.harness_max_tool_calls,
                 timeout_seconds=settings.harness_run_timeout_seconds,
+                max_context_tokens=settings.context_token_budget,
             )
             for event, data in get_harness(harness_type).run(req):
                 if event == "run.started":

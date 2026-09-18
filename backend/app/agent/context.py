@@ -21,6 +21,13 @@ def _document_id_for_name(conn: sqlite3.Connection, project_id: str, name: str) 
     return row["id"] if row else None
 
 
+def document_ids_for_files(
+    conn: sqlite3.Connection, project_id: str, files: list[str] | None
+) -> list[str]:
+    """Resolve @file mentions (names or ids) to document ids (FR-007)."""
+    return [d for d in (_document_id_for_name(conn, project_id, f) for f in files or []) if d]
+
+
 def build_context_pack(
     conn: sqlite3.Connection,
     settings: Settings,
@@ -29,7 +36,9 @@ def build_context_pack(
     selected_files: list[str] | None = None,
     budget_chars: int | None = None,
 ) -> dict:
-    budget = budget_chars or settings.context_char_budget
+    """The spec states the limit in tokens (§18); we budget characters at the
+    ~4 chars/token heuristic so it stays comparable across models."""
+    budget = budget_chars or settings.context_token_budget * 4
     doc_ids: list[str] = []
     for f in selected_files or []:
         did = _document_id_for_name(conn, project_id, f)
@@ -54,13 +63,21 @@ def build_context_pack(
         "truncated": False,
     }
     used = 0
+    included_any = False
     by_doc: dict[str, dict] = {}
-    for r in results:
+    for i, r in enumerate(results):
         chunk_len = len(r["text"]) + 40
         if used + chunk_len > budget:
-            pack["truncated"] = True
-            break
+            if not included_any:
+                # always include at least one source, truncated to the budget
+                text = r["text"][: max(budget - 40, 200)]
+                r = {**r, "text": text + "…"}
+                chunk_len = len(r["text"]) + 40
+            else:
+                pack["truncated"] = True
+                break
         used += chunk_len
+        included_any = True
         entry = by_doc.setdefault(
             r["document_id"], {"document": r["document_name"], "chunks": [], "texts": []}
         )

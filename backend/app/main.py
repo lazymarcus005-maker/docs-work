@@ -21,6 +21,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     conn = db.connect(settings.db_path)
     db.init_db(conn)
+
+    # Runs left RUNNING by a crash get a terminal state so projects never
+    # show zombie runs after restart (spec §44, DoD #18). WAITING_USER runs
+    # are legitimate persistent states and are kept.
+    from .util import now_iso
+
+    ts = now_iso()
+    conn.execute(
+        "UPDATE agent_runs SET status = 'FAILED',"
+        " error_code = 'interrupted_by_restart', completed_at = ?, updated_at = ?"
+        " WHERE status IN ('RUNNING', 'PENDING')",
+        (ts, ts),
+    )
+    conn.commit()
+
     secrets = SecretStore(settings.secrets_path, settings.secret_key_path)
 
     @asynccontextmanager

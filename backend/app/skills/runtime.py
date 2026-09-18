@@ -11,7 +11,7 @@ from typing import Generator
 
 from ..agent import tools as tools_mod
 from ..agent.context import build_context_pack, render_context_block
-from ..agent.harness import _native_decision, _prompt_json_decision
+from ..agent.harness import native_decision, prompt_json_decision
 from ..llm.base import ChatMessage
 from .loader import Skill
 
@@ -72,9 +72,9 @@ def execute_skill_gen(
             return {"error": "cancelled"}
         iterations += 1
         if mode == "prompt-json":
-            response, deltas = _prompt_json_decision(req, messages, tool_defs)
+            response, deltas = prompt_json_decision(req, messages, tool_defs)
         else:
-            response, deltas = _native_decision(req, messages, tool_defs)
+            response, deltas = native_decision(req, messages, tool_defs)
 
         if not response.has_tool_calls:
             summary = response.content or "".join(deltas)
