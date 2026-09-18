@@ -29,8 +29,16 @@ def search_project(
 ) -> dict:
     require_project(conn, project_id)
     limit = max(1, min(body.limit, 100))
+    if body.mode == "hybrid":
+        from ..retrieval import vector_search
+
+        out = vector_search.hybrid_search(
+            conn, project_id, body.query, limit=limit,
+            document_ids=body.document_ids,
+        )
+        return {"query": body.query, "mode": out["mode"], "results": out["results"]}
     results = text_search.text_search(
         conn, project_id, body.query, limit=limit,
         document_ids=body.document_ids,
     )
-    return {"query": body.query, "mode": body.mode, "results": results}
+    return {"query": body.query, "mode": "text", "results": results}

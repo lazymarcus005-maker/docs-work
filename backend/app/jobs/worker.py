@@ -71,11 +71,12 @@ def start_workers(app) -> None:
     settings: Settings = app.state.settings
     conn = app.state.conn
 
-    from ..documents.pipeline import parse_document_task
+    from ..documents.pipeline import parse_document_task, embed_document_task
     from ..knowledge.extraction import extract_entities_task
 
     register_handler("PARSE_DOCUMENT", parse_document_task)
     register_handler("EXTRACT_ENTITIES", extract_entities_task)
+    register_handler("EMBED_DOCUMENT", embed_document_task)
 
     # jobs left RUNNING by a previous crash resume from the queue (spec §44)
     queue.requeue_interrupted(conn)

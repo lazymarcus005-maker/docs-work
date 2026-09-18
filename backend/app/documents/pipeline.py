@@ -143,10 +143,29 @@ def parse_document_task(conn: sqlite3.Connection, settings: Settings, job: dict)
     if result["status"] == "FAILED":
         raise RuntimeError(result["error"])
 
-    # knowledge extraction is lower-priority background work (spec §38)
+    # enrichment runs at lower priority than interactive work (spec §38)
     from ..jobs import queue
 
+    queue.enqueue(
+        conn, job["project_id"], "EMBED_DOCUMENT",
+        document_id=document_id, priority=queue.PRIORITY_PARSE + 10,
+    )
     queue.enqueue(
         conn, job["project_id"], "EXTRACT_ENTITIES",
         document_id=document_id, priority=queue.PRIORITY_ENRICHMENT,
     )
+
+
+def embed_document_task(conn: sqlite3.Connection, settings: Settings, job: dict) -> None:
+    """Job-queue handler for EMBED_DOCUMENT (ticket #14)."""
+    from ..embeddings import provider as emb_provider
+    from ..retrieval import vector_search
+
+    document_id = job.get("document_id") or job["payload"].get("document_id")
+    provider = emb_provider.get_provider(settings.embedding_model)
+    vector_search.embed_document_chunks(conn, provider, document_id)
+    conn.execute(
+        "UPDATE documents SET embedding_version = ?, updated_at = ? WHERE id = ?",
+        (provider.model, now_iso(), document_id),
+    )
+    conn.commit()
