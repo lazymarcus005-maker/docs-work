@@ -86,7 +86,7 @@ def test_chat_streams_deltas_and_persists_messages(client):
         return sse_response("again")
     client.app.state.llm_transport = httpx.MockTransport(handler2)
     _stream_events(client, pid, {"session_id": session_id, "message": "more"})
-    assert len(seen["messages"]) >= 4  # user, assistant, user
+    assert len(seen["messages"]) == 3  # user, assistant, user
 
 
 def test_chat_without_profile_fails_actionably(client):
