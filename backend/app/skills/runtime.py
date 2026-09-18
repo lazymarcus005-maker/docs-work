@@ -10,6 +10,7 @@ import json
 from typing import Generator
 
 from ..agent import tools as tools_mod
+from ..agent.compaction import truncate_text
 from ..agent.context import build_context_pack, render_context_block
 from ..agent.harness import native_decision, prompt_json_decision
 from ..llm.base import ChatMessage
@@ -98,7 +99,8 @@ def execute_skill_gen(
             messages.append(ChatMessage(role="assistant", content=None, tool_calls=[tc]))
             messages.append(ChatMessage(
                 role="tool", tool_call_id=tc.id, name=tc.name,
-                content=json.dumps(observation, ensure_ascii=False),
+                content=truncate_text(json.dumps(observation, ensure_ascii=False),
+                                      req.observation_char_cap),
             ))
 
     result = {

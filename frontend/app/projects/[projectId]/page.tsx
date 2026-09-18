@@ -78,6 +78,13 @@ export default function ChatPage() {
           ? `Context found in: ${e.data.sources.join(", ")}`
           : "No matching context found");
         break;
+      case "context.compacting":
+        setRunStatus("Context is getting long — compacting…");
+        break;
+      case "context.compacted":
+        setRunStatus(
+          `Context compacted (${e.data.before_tokens} → ${e.data.after_tokens} tokens)`);
+        break;
       case "tool.started":
         setRunStatus(`Tool: ${e.data.tool}…`);
         break;

@@ -48,6 +48,18 @@ class Settings:
         # per token heuristic) so the limit is comparable across models.
         self.context_token_budget = int(env.get("COWORK_CONTEXT_TOKEN_BUDGET", "12000"))
 
+        # Harness context compaction (standard agent-harness behavior):
+        # window defaults apply when the LLM profile has no override;
+        # compaction starts once usage exceeds threshold × working budget.
+        self.default_context_window_tokens = int(
+            env.get("COWORK_DEFAULT_CONTEXT_WINDOW", "128000"))
+        self.context_compact_threshold = float(
+            env.get("COWORK_CONTEXT_COMPACT_THRESHOLD", "0.7"))
+        self.observation_char_cap = int(
+            env.get("COWORK_OBSERVATION_CHAR_CAP", "6000"))
+        self.compact_keep_recent = int(
+            env.get("COWORK_COMPACT_KEEP_RECENT", "6"))
+
         # Observability (spec §42). Debug mode may include payload excerpts.
         self.log_level = env.get("COWORK_LOG_LEVEL", "INFO")
         self.debug_payloads = env.get("COWORK_DEBUG_PAYLOADS", "0") == "1"

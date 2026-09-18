@@ -93,7 +93,17 @@ def stream_turn(
                 max_iterations=settings.harness_max_iterations,
                 max_tool_calls=settings.harness_max_tool_calls,
                 timeout_seconds=settings.harness_run_timeout_seconds,
-                max_context_tokens=settings.context_token_budget,
+                context_window_tokens=(
+                    profile.get("context_window_override")
+                    or settings.default_context_window_tokens),
+                max_output_tokens=profile.get("max_output_tokens"),
+                compact_threshold=settings.context_compact_threshold,
+                keep_recent=settings.compact_keep_recent,
+                observation_char_cap=settings.observation_char_cap,
+                # absolute backstop only — compaction should act long before
+                max_context_tokens=(
+                    profile.get("context_window_override")
+                    or settings.default_context_window_tokens),
             )
             for event, data in get_harness(harness_type).run(req):
                 if event == "run.started":

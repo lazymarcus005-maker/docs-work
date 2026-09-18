@@ -25,6 +25,8 @@ from ..config import Settings
 from ..llm.base import ChatMessage, LLMClient, LLMResponse, ToolCall
 from ..util import log_event
 from . import run_state, tools as tools_mod
+from .compaction import (compact_messages, context_usage, should_compact,
+                         truncate_text, working_budget)
 from .context import build_context_pack, document_ids_for_files, render_context_block
 from .tools import ToolContext
 
@@ -66,6 +68,11 @@ class HarnessRequest:
         max_tool_calls: int = 24,
         timeout_seconds: int = 300,
         max_context_tokens: int | None = None,
+        context_window_tokens: int = 0,
+        max_output_tokens: int | None = None,
+        compact_threshold: float = 0.7,
+        keep_recent: int = 6,
+        observation_char_cap: int = 6000,
     ) -> None:
         self.conn = conn
         self.settings = settings
@@ -80,7 +87,13 @@ class HarnessRequest:
         self.max_iterations = max_iterations
         self.max_tool_calls = max_tool_calls
         self.timeout_seconds = timeout_seconds
-        self.max_context_tokens = max_context_tokens  # §19.1 stop control
+        self.max_context_tokens = max_context_tokens  # §19.1 absolute backstop
+        self.context_window_tokens = context_window_tokens  # from the profile
+        self.max_output_tokens = max_output_tokens
+        self.compact_threshold = compact_threshold
+        self.keep_recent = keep_recent
+        self.observation_char_cap = observation_char_cap
+        self.observed_prompt_tokens: int | None = None
 
 
 def _sse_pair(event: str, data: dict):
@@ -190,7 +203,36 @@ class NativeHarness:
                     raise StopRun("max_iterations")
                 if tool_calls_total >= req.max_tool_calls:
                     raise StopRun("max_tool_calls")
-                if req.max_context_tokens and _approx_messages_tokens(messages) > req.max_context_tokens:
+
+                # standard harness behavior: compact instead of failing when
+                # the conversation grows past the model's usable window (§18)
+                budget = working_budget(
+                    req.context_window_tokens, req.max_output_tokens)
+                usage = context_usage(messages, req.observed_prompt_tokens)
+                if should_compact(usage, budget, req.compact_threshold):
+                    yield _sse_pair("context.compacting", {
+                        "run_id": run_id, "usage_tokens": usage,
+                        "budget_tokens": budget,
+                    })
+                    messages, comp = compact_messages(
+                        messages, req.client, keep_recent=req.keep_recent)
+                    if comp["compacted"]:
+                        yield _sse_pair("context.compacted", {
+                            "run_id": run_id,
+                            "before_tokens": comp["before"],
+                            "after_tokens": comp["after"],
+                            "summarized_messages": comp["summarized_messages"],
+                            "fallback": comp["fallback"],
+                        })
+                        log_event(conn, "context.compacted", project_id, {
+                            "run_id": run_id,
+                            "before": comp["before"], "after": comp["after"],
+                        })
+                        conn.commit()
+
+                # absolute backstop — compaction should prevent reaching this
+                if req.max_context_tokens and context_usage(
+                        messages, req.observed_prompt_tokens) > req.max_context_tokens:
                     raise StopRun("max_context_tokens")
                 if time.monotonic() - started > req.timeout_seconds:
                     raise StopRun("run_timeout")
@@ -201,6 +243,8 @@ class NativeHarness:
                     response, deltas = prompt_json_decision(req, messages, tool_defs)
                 else:
                     response, deltas = native_decision(req, messages, tool_defs)
+                if response.prompt_tokens:
+                    req.observed_prompt_tokens = response.prompt_tokens
 
                 if response.has_tool_calls:
                     for tc in response.tool_calls:
@@ -263,12 +307,6 @@ def _now() -> str:
     from ..util import now_iso
 
     return now_iso()
-
-
-def _approx_messages_tokens(messages: list[ChatMessage]) -> int:
-    """~4 chars per token heuristic; tool observations dominate run context."""
-    chars = sum(len(m.content or "") for m in messages)
-    return chars // 4
 
 
 def _global_instruction(conn: sqlite3.Connection) -> str:
@@ -451,8 +489,10 @@ def _execute_tool(
         "summary": _observation_summary(name, observation),
     })
     messages.append(ChatMessage(role="assistant", content=None, tool_calls=[tc]))
-    messages.append(ChatMessage(role="tool", tool_call_id=tc.id, name=name,
-                                content=json.dumps(observation, ensure_ascii=False)))
+    messages.append(ChatMessage(
+        role="tool", tool_call_id=tc.id, name=name,
+        content=truncate_text(json.dumps(observation, ensure_ascii=False),
+                              req.observation_char_cap)))
 
 
 def _observation_summary(name: str, observation: dict) -> str:
