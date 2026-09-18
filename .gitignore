@@ -1,0 +1,15 @@
+.venv/
+node_modules/
+.next/
+__pycache__/
+*.pyc
+.pytest_cache/
+data/
+scratch-tmp/
+.scratch/
+.DS_Store
+*.db
+*.db-wal
+*.db-shm
+.vercel
+frontend/.next
