@@ -190,6 +190,114 @@ def get_evidence(ctx: ToolContext, args: dict) -> dict:
     return out
 
 
+# ------------------------------------------- graph tools (ticket #13, §20)
+@register(
+    "find_entity",
+    "Find knowledge-graph entities in this project by name or alias.",
+    {
+        "type": "object",
+        "properties": {"query": {"type": "string"}},
+        "required": ["query"],
+        "additionalProperties": False,
+    },
+)
+def find_entity(ctx: ToolContext, args: dict) -> dict:
+    rows = ctx.conn.execute(
+        "SELECT DISTINCT e.id, e.type, e.canonical_name FROM entities e"
+        " LEFT JOIN entity_aliases a ON a.entity_id = e.id"
+        " WHERE e.project_id = ? AND"
+        " (e.canonical_name LIKE ? OR a.alias LIKE ?) LIMIT 20",
+        (ctx.project_id, f"%{args['query']}%", f"%{args['query']}%"),
+    ).fetchall()
+    return {"entities": [dict(r) for r in rows]}
+
+
+@register(
+    "query_graph",
+    "Traverse the project knowledge graph from an entity: connected systems,"
+    " dependencies, references (multi-hop, evidence-backed).",
+    {
+        "type": "object",
+        "properties": {
+            "entity": {"type": "string"},
+            "depth": {"type": "integer", "minimum": 1, "maximum": 3},
+            "relation_type": {"type": "string"},
+        },
+        "required": ["entity"],
+        "additionalProperties": False,
+    },
+)
+def query_graph(ctx: ToolContext, args: dict) -> dict:
+    depth = min(int(args.get("depth", 2)), 3)
+    rel_filter = args.get("relation_type")
+
+    start = ctx.conn.execute(
+        "SELECT DISTINCT e.id FROM entities e"
+        " LEFT JOIN entity_aliases a ON a.entity_id = e.id"
+        " WHERE e.project_id = ? AND (e.canonical_name = ? OR a.alias = ?"
+        " OR e.canonical_name LIKE ?) LIMIT 1",
+        (ctx.project_id, args["entity"], args["entity"], f"%{args['entity']}%"),
+    ).fetchone()
+    if start is None:
+        return {"error": f"entity not found in this project: {args['entity']}"}
+
+    start_id = start["id"]
+    names = {r["id"]: r["canonical_name"] for r in ctx.conn.execute(
+        "SELECT id, canonical_name FROM entities WHERE project_id = ?",
+        (ctx.project_id,)).fetchall()}
+    nodes = {start_id}
+    frontier = [start_id]
+    edges = []
+    for _ in range(depth):
+        if not frontier:
+            break
+        marks = ",".join("?" for _ in frontier)
+        sql = (
+            "SELECT r.id, r.source_entity_id, r.relation_type,"
+            " r.target_entity_id, r.confidence,"
+            " s.canonical_name AS source, t.canonical_name AS target"
+            " FROM relations r JOIN entities s ON s.id = r.source_entity_id"
+            " JOIN entities t ON t.id = r.target_entity_id"
+            f" WHERE r.project_id = ? AND (r.source_entity_id IN ({marks})"
+            f" OR r.target_entity_id IN ({marks}))"
+        )
+        params = [ctx.project_id, *frontier, *frontier]
+        if rel_filter:
+            sql += " AND r.relation_type = ?"
+            params.append(rel_filter)
+        next_frontier = []
+        for row in ctx.conn.execute(sql, params).fetchall():
+            nodes.update((row["source_entity_id"], row["target_entity_id"]))
+            edges.append({
+                "relation_id": row["id"], "type": row["relation_type"],
+                "source": row["source"], "target": row["target"],
+                "confidence": row["confidence"],
+                "evidence_chunks": [
+                    e["chunk_id"] for e in ctx.conn.execute(
+                        "SELECT chunk_id FROM relation_evidence WHERE relation_id = ?",
+                        (row["id"],),
+                    ).fetchall()
+                ],
+            })
+            for nid in (row["source_entity_id"], row["target_entity_id"]):
+                if nid not in nodes or nid not in next_frontier:
+                    next_frontier.append(nid)
+        frontier = [n for n in next_frontier if n not in frontier or n == start_id]
+        frontier = list(dict.fromkeys(frontier))
+    # deduplicate edges
+    seen_edges = set()
+    unique_edges = []
+    for e in edges:
+        key = e["relation_id"]
+        if key not in seen_edges:
+            seen_edges.add(key)
+            unique_edges.append(e)
+    return {
+        "nodes": [{"id": nid, "name": names.get(nid)} for nid in sorted(nodes)],
+        "edges": unique_edges,
+    }
+
+
 # ----------------------------------------------- artifact tools (ticket #8)
 @register(
     "list_outputs",

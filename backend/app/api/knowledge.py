@@ -52,6 +52,41 @@ class ReviewResolveIn(BaseModel):
 
 
 # ------------------------------------------------- knowledge layer (ticket 12)
+@router.get("/health")
+def knowledge_health(project_id: str, conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    """Lightweight context-health indicator (spec §56) — deliberately not a
+    claim of graph completeness."""
+    require_project(conn, project_id)
+    docs = conn.execute(
+        "SELECT status, COUNT(*) AS n FROM documents WHERE project_id = ?"
+        " GROUP BY status", (project_id,),
+    ).fetchall()
+    by_status = {r["status"]: r["n"] for r in docs}
+    total = sum(by_status.values())
+    return {
+        "documents_total": total,
+        "documents_ready": by_status.get("READY", 0),
+        "documents_stale": by_status.get("STALE", 0),
+        "parser_failures": by_status.get("FAILED", 0),
+        "open_review_items": conn.execute(
+            "SELECT COUNT(*) AS n FROM review_items WHERE project_id = ? AND status='open'",
+            (project_id,),
+        ).fetchone()["n"],
+        "conflicts": conn.execute(
+            "SELECT COUNT(*) AS n FROM conflicts WHERE project_id = ? AND status='open'",
+            (project_id,),
+        ).fetchone()["n"],
+        "entities": conn.execute(
+            "SELECT COUNT(*) AS n FROM entities WHERE project_id = ?",
+            (project_id,),
+        ).fetchone()["n"],
+        "relations": conn.execute(
+            "SELECT COUNT(*) AS n FROM relations WHERE project_id = ?",
+            (project_id,),
+        ).fetchone()["n"],
+    }
+
+
 @router.get("/entities")
 def list_entities(
     project_id: str,
