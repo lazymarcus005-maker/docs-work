@@ -24,6 +24,8 @@ class ToolContext:
     selected_document_ids: list[str] = field(default_factory=list)
     skill_id: str | None = None
     skill_version: str | None = None
+    session_id: str | None = None
+    run_id: str | None = None
 
 
 @dataclass
@@ -188,6 +190,53 @@ def get_evidence(ctx: ToolContext, args: dict) -> dict:
     out = dict(row)
     out["section_path"] = _json.loads(out["section_path"] or "[]")
     return out
+
+
+# --------------------------------------------- memory tools (AI memory)
+@register(
+    "remember",
+    "Save a durable project memory for future sessions: an important fact,"
+    " decision, preference, or glossary term the user stated or that the"
+    " conversation established. Use sparingly for durable things, not chat",
+    {
+        "type": "object",
+        "properties": {
+            "content": {"type": "string", "maxLength": 600},
+            "kind": {
+                "type": "string",
+                "enum": ["fact", "decision", "preference", "glossary", "todo"],
+            },
+        },
+        "required": ["content"],
+        "additionalProperties": False,
+    },
+)
+def remember(ctx: ToolContext, args: dict) -> dict:
+    from ..knowledge import memory
+
+    try:
+        item = memory.create_memory(
+            ctx.conn, ctx.project_id,
+            content=args["content"],
+            kind=args.get("kind", "fact"),
+            source="agent",
+            source_refs={"session_id": ctx.session_id, "run_id": ctx.run_id},
+        )
+        return {"memory_id": item["id"], "content": item["content"],
+                "deduplicated": item["created_at"] != item["updated_at"]}
+    except memory.MemoryError as e:
+        return {"error": str(e)}
+
+
+@register(
+    "list_memories",
+    "List the durable project memories currently active.",
+    {"type": "object", "properties": {}, "additionalProperties": False},
+)
+def list_memories_tool(ctx: ToolContext, args: dict) -> dict:
+    from ..knowledge import memory
+
+    return {"memories": memory.load_active_memories(ctx.conn, ctx.project_id)}
 
 
 # ------------------------------------------- graph tools (ticket #13, §20)

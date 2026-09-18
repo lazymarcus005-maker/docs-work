@@ -108,6 +108,7 @@ class NativeHarness:
         tool_ctx = ToolContext(
             conn, req.settings, project_id,
             selected_document_ids=document_ids_for_files(conn, project_id, req.selected_files),
+            session_id=req.session_id,
         )
         tool_names = [t.name for t in tools_mod.get_tools()] + ["ask_user", "run_skill"]
 
@@ -148,10 +149,15 @@ class NativeHarness:
         ).fetchone()
         project_instruction = project["instruction"] if project else ""
 
+        # durable AI memory (spec §26): context, never instructions (§27)
+        from ..knowledge.memory import render_memory_block
+
         system_content = (
             f"{SYSTEM_RULES}\n"
             f"Workspace instruction:\n{_global_instruction(conn)}\n\n"
             f"Project instruction:\n{project_instruction}\n\n"
+            "Project memory (durable facts from earlier sessions — respect"
+            f" these, do not contradict them):\n{render_memory_block(conn, project_id)}\n\n"
             f"{context_block}\n\n"
             f"Available tools: {', '.join(tool_names)}\n"
             "run_skill: run a named skill with {\"skill\": id, \"instruction\": text}.\n"

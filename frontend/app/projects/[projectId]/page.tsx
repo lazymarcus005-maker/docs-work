@@ -31,11 +31,14 @@ export default function ChatPage() {
   const refreshSessions = useCallback(() => {
     api.listSessions(pid).then((r) => {
       setSessions(r.sessions);
-      // remember the chosen session across navigation within the workspace
-      setSessionId((cur) => cur
-        || sessionStorage.getItem(sessionKey)
-        || r.sessions[0]?.id
-        || null);
+      // restore the remembered session; "" means an explicit fresh chat
+      setSessionId((cur) => {
+        if (cur) return cur;
+        const stored = sessionStorage.getItem(sessionKey);
+        if (stored === "") return null;
+        if (stored && r.sessions.some((s) => s.id === stored)) return stored;
+        return r.sessions[0]?.id ?? null;
+      });
     }).catch((e) => setError(String(e)));
   }, [pid, sessionKey]);
 

@@ -22,6 +22,8 @@ def skill_system_prompt(req, skill: Skill, instruction: str) -> str:
     project = req.conn.execute(
         "SELECT instruction FROM projects WHERE id = ?", (req.project_id,)
     ).fetchone()
+    from ..knowledge.memory import render_memory_block
+
     return (
         f"You are executing the '{skill.name}' skill (v{skill.version}) inside the "
         f"project agent run.\n\n"
@@ -29,6 +31,8 @@ def skill_system_prompt(req, skill: Skill, instruction: str) -> str:
         f"Skill rules:\n{rules}\n\n"
         f"Skill workflow:\n{steps}\n\n"
         f"Project instruction: {(project['instruction'] if project else '') or '(none)'}\n\n"
+        "Project memory (durable facts — respect, do not contradict):\n"
+        f"{render_memory_block(req.conn, req.project_id)}\n\n"
         f"Allowed tools: {', '.join(skill.tools) or '(none)'}.\n"
         "Write your output as a file with the write_artifact tool before finishing. "
         "Cite chunk ids for important claims.\n"

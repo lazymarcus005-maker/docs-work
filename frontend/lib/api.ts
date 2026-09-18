@@ -27,6 +27,17 @@ export interface Session {
   updated_at: string;
 }
 
+export interface MemoryItem {
+  id: string;
+  content: string;
+  kind: string;
+  source: string;
+  status: string;
+  source_refs: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Message {
   id: string;
   role: string;
@@ -207,6 +218,17 @@ export const api = {
     if (!res.body) throw new Error("Empty response body");
     await consumeSSE(res.body, onEvent);
   },
+
+  // memories (AI long-term memory)
+  memories: (pid: string, includeArchived = false) =>
+    req<{ memories: MemoryItem[] }>(
+      `/api/projects/${pid}/memories${includeArchived ? "?include_archived=true" : ""}`),
+  createMemory: (pid: string, body: { content: string; kind?: string }) =>
+    req<MemoryItem>(`/api/projects/${pid}/memories`, { method: "POST", body: JSON.stringify(body) }),
+  updateMemory: (pid: string, mid: string, body: { content?: string; kind?: string; status?: string }) =>
+    req<MemoryItem>(`/api/projects/${pid}/memories/${mid}`, { method: "PATCH", body: JSON.stringify(body) }),
+  deleteMemory: (pid: string, mid: string) =>
+    req<void>(`/api/projects/${pid}/memories/${mid}`, { method: "DELETE" }),
 
   // knowledge
   entities: (pid: string, query?: string) =>
