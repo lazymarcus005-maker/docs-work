@@ -47,9 +47,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_headers=["*"],
     )
 
-    from .api import health, projects
+    from .api import files, health, projects, settings
 
     app.include_router(health.router)
     app.include_router(projects.router)
+    app.include_router(files.router)
+    app.include_router(settings.router)
 
     return app
