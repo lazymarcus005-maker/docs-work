@@ -7,7 +7,8 @@ export interface Project {
   instruction: string;
   status: string;
   created_at: string;
-  files?: { files: number; ready: number };
+  file_count?: number;
+  ready_count?: number;
 }
 
 export interface ProjectFile {

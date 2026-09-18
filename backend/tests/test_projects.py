@@ -32,7 +32,7 @@ def test_list_and_reopen_project(client):
     reopened = client.get(f"/api/projects/{created['id']}")
     assert reopened.status_code == 200
     assert reopened.json()["name"] == "P1"
-    assert reopened.json()["files"] == {"files": 0, "ready": 0}
+    assert reopened.json()["file_count"] == 0 and reopened.json()["ready_count"] == 0
 
 
 def test_get_missing_project_404(client):

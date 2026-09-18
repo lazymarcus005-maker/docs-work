@@ -64,7 +64,9 @@ def list_projects(conn: sqlite3.Connection = Depends(get_db)) -> dict:
     projects = []
     for r in rows:
         item = dict(r)
-        item.update(_file_counts(conn, item["id"]))
+        counts = _file_counts(conn, item["id"])
+        item["file_count"] = counts["files"]
+        item["ready_count"] = counts["ready"]
         projects.append(item)
     return {"projects": projects}
 
@@ -105,7 +107,10 @@ def get_project_route(
     project_id: str, conn: sqlite3.Connection = Depends(get_db)
 ) -> dict:
     project = require_project(conn, project_id)
-    project["files"] = _file_counts(conn, project_id)
+    project["file_count"], project["ready_count"] = (
+        _file_counts(conn, project_id)["files"],
+        _file_counts(conn, project_id)["ready"],
+    )
     return project
 
 

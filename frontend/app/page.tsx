@@ -43,8 +43,8 @@ export default function ProjectsPage() {
                   <Link href={`/projects/${p.id}`}><strong>{p.name}</strong></Link>
                   <span className="muted">{p.description}</span>
                   <span style={{ flex: 1 }} />
-                  <span className="pill">{p.files?.files ?? 0} files</span>
-                  <span className="pill ok">{p.files?.ready ?? 0} ready</span>
+                  <span className="pill">{p.file_count ?? 0} files</span>
+                  <span className="pill ok">{p.ready_count ?? 0} ready</span>
                 </li>
               ))}
             </ul>
