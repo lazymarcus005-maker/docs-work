@@ -144,7 +144,6 @@ def chat(
     request: Request = None,
 ) -> StreamingResponse:
     require_project(conn, project_id)
-    llm_transport = getattr(request.app.state, "llm_transport", None) if request else None
     if not body.message.strip():
         raise HTTPException(status_code=422, detail="Message is required")
 
@@ -175,70 +174,12 @@ def chat(
         else profiles.default_profile(conn)
     )
 
-    run_id = new_id("run")
+    from ..agent import service
 
-    def generate():
-        nonlocal run_id
-        yield _sse("run.started", {
-            "run_id": run_id, "session_id": session_id,
-            "user_message_id": user_message_id,
-        })
-        if profile is None:
-            yield _sse("run.failed", {
-                "run_id": run_id,
-                "message": "No LLM profile is configured, so the agent cannot run.",
-                "actions": ["Open Settings and add an LLM profile (base URL, API key, model)"],
-            })
-            return
-
-        cancel = threading.Event()
-        CANCEL_REGISTRY[run_id] = cancel
-
-        from ..agent.harness import HarnessRequest, NativeHarness
-
-        client = profiles.build_client(
-            conn, secrets, profile,
-            transport=getattr(request.app.state, "llm_transport", None)
-            if request else None,
-        )
-        req = HarnessRequest(
-            conn=conn,
-            settings=settings,
-            client=client,
-            project_id=project_id,
-            session_id=session_id,
-            user_message=body.message,
-            user_message_id=user_message_id,
-            selected_files=body.selected_files or [],
-            skill_id=body.skill_id,
-            cancel_event=cancel,
-            max_iterations=settings.harness_max_iterations,
-            max_tool_calls=settings.harness_max_tool_calls,
-            timeout_seconds=settings.harness_run_timeout_seconds,
-        )
-        final_text, evidence_refs, run_status = "", [], "FAILED"
-        try:
-            for event, data in NativeHarness().run(req):
-                if event == "run.started":
-                    run_id = data["run_id"]  # harness owns run identity
-                if event == "run.completed":
-                    final_text = data.get("content", "")
-                    evidence_refs = data.get("evidence_refs", [])
-                    run_status = data.get("status", "SUCCEEDED")
-                yield _sse(event, data)
-        finally:
-            CANCEL_REGISTRY.pop(run_id, None)
-            client.close()
-            if final_text:
-                _persist_assistant_message(
-                    conn, session_id, project_id, final_text,
-                    meta={"run_id": run_id, "evidence_refs": evidence_refs},
-                )
-
-    return StreamingResponse(
-        generate(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    return service.stream_turn(
+        request, conn, settings, secrets, project_id, session_id,
+        user_message_id, body.message, body.selected_files or [],
+        body.skill_id, profile,
     )
 
 
@@ -249,9 +190,9 @@ def cancel_run(
     conn: sqlite3.Connection = Depends(get_db),
 ) -> dict:
     require_project(conn, project_id)
-    ev = CANCEL_REGISTRY.get(run_id)
-    if ev is not None:
-        ev.set()
+    from ..agent import service
+
+    if service.request_cancel(run_id):
         return {"run_id": run_id, "cancelled": True}
     row = conn.execute("SELECT id FROM agent_runs WHERE id = ?", (run_id,)).fetchone()
     if row is None:

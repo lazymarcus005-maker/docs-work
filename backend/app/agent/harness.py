@@ -111,6 +111,25 @@ class NativeHarness:
         )
         tool_names = [t.name for t in tools_mod.get_tools()] + ["ask_user", "run_skill"]
 
+        tool_defs = tools_mod.tool_defnames(
+            [n for n in tool_names if n not in ("ask_user", "run_skill")]
+        )
+        from ..llm.base import ToolDef
+
+        tool_defs.append(ToolDef(
+            "ask_user",
+            "Pause the run and ask the user a clarifying question.",
+            {"type": "object",
+             "properties": {"question": {"type": "string"}},
+             "required": ["question"], "additionalProperties": False},
+        ))
+        tool_defs.append(ToolDef(
+            "run_skill",
+            "Run a named skill, e.g. {\"skill\": \"ba\", \"instruction\": \"...\"}.",
+            {"type": "object",
+             "properties": {"skill": {"type": "string"}, "instruction": {"type": "string"}},
+             "required": ["skill"], "additionalProperties": False},
+        ))
         pack, context_block, events_ahead = None, "", []
         yield _sse_pair("context.search.started", {"run_id": run_id})
         pack = build_context_pack(
@@ -146,6 +165,11 @@ class NativeHarness:
             messages.append(m)
         messages.append(ChatMessage(role="user", content=req.user_message))
         mode = _tool_mode(req)
+
+        # explicit skill invocation runs before the free loop (spec §54)
+        if req.skill_id:
+            yield from _invoke_skill(req, tool_ctx, run_id, req.skill_id,
+                                     req.user_message, messages)
         final_text = ""
         status = "SUCCEEDED"
         error_code = None
@@ -166,9 +190,9 @@ class NativeHarness:
                 run_state.update_run(conn, run_id, iteration_count=iterations)
 
                 if mode == "prompt-json":
-                    response, deltas = _prompt_json_decision(req, messages, tool_names)
+                    response, deltas = _prompt_json_decision(req, messages, tool_defs)
                 else:
-                    response, deltas = _native_decision(req, messages, tool_names)
+                    response, deltas = _native_decision(req, messages, tool_defs)
 
                 if response.has_tool_calls:
                     for tc in response.tool_calls:
@@ -343,6 +367,36 @@ def _chunk(text: str, size: int = 64):
 
 
 # ------------------------------------------------------------ execution
+def _invoke_skill(
+    req: HarnessRequest,
+    tool_ctx: ToolContext,
+    run_id: str,
+    skill_id: str,
+    instruction: str,
+    messages: list[ChatMessage],
+) -> Iterator[tuple[str, dict]]:
+    """Load and run a skill under this run, appending its observation."""
+    from ..skills import loader, runtime
+
+    skill = loader.get_skill(req.conn, skill_id)
+    if skill is None:
+        observation = {"error": f"skill not found: {skill_id}"}
+    else:
+        gen = runtime.execute_skill_gen(req, tool_ctx, skill, instruction, run_id)
+        observation = {}
+        while True:
+            try:
+                yield next(gen)
+            except StopIteration as stop:
+                observation = stop.value or {}
+                break
+
+    messages.append(ChatMessage(
+        role="assistant",
+        content=f"[skill {skill_id} result] {json.dumps(observation, ensure_ascii=False)}",
+    ))
+
+
 def _execute_tool(
     req: HarnessRequest,
     conn: sqlite3.Connection,
@@ -367,10 +421,24 @@ def _execute_tool(
         messages.append(ChatMessage(role="assistant", content=question))
         raise StopRun("waiting_user", data=question)
 
-    observation = tools_mod.execute(tool_ctx, name, args)
     if name == "run_skill":
-        # skills land in ticket #8; until then report honestly
-        observation = {"error": "no skills are installed in this build yet"}
+        skill_id = args.get("skill") or ""
+        observation = {}
+        for ev in _invoke_skill(req, tool_ctx, run_id, skill_id,
+                                args.get("instruction") or req.user_message, messages):
+            if ev[0] == "skill.completed":
+                observation = ev[1]
+            yield ev
+        run_state.update_run(conn, run_id, skill_call_count=(run_state.get_run(conn, run_id) or {}).get("skill_call_count", 0) + 1)
+        yield _sse_pair("tool.completed", {
+            "run_id": run_id, "tool": name,
+            "summary": f"skill {skill_id}: {observation.get('summary', observation.get('error', 'done'))}",
+        })
+        messages.append(ChatMessage(role="tool", tool_call_id=tc.id, name=name,
+                                    content=json.dumps(observation, ensure_ascii=False)))
+        return
+
+    observation = tools_mod.execute(tool_ctx, name, args)
 
     yield _sse_pair("tool.completed", {
         "run_id": run_id, "tool": name,

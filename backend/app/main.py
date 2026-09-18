@@ -47,14 +47,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_headers=["*"],
     )
 
-    from .api import chat, files, health, jobs, projects, search, settings
+    from .api import (artifacts, chat, files, health, jobs, projects, search,
+                      settings as settings_api, skills)
 
     app.include_router(health.router)
     app.include_router(projects.router)
     app.include_router(files.router)
-    app.include_router(settings.router)
+    app.include_router(settings_api.router)
     app.include_router(search.router)
     app.include_router(jobs.router)
     app.include_router(chat.router)
+    app.include_router(skills.router)
+    app.include_router(artifacts.router)
+
+    from .skills import loader
+
+    loader.sync_registry(conn, settings)
 
     return app

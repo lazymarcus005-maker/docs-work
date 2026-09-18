@@ -1,0 +1,5 @@
+steps:
+  - understand_task
+  - collect_context
+  - summarize_sources
+  - write_output

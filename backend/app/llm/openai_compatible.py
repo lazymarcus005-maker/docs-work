@@ -169,6 +169,15 @@ class OpenAICompatibleProvider:
             self._url("/chat/completions"),
             json=self._payload(messages, tools, True, max_output_tokens),
         )
+
+        # Some gateways ignore `stream` and return a normal JSON completion.
+        if (res.headers.get("content-type") or "").startswith("application/json"):
+            parsed = self._parse_response(res.json())
+            if parsed.content:
+                yield {"delta": parsed.content}
+            yield {"response": parsed}
+            return
+
         tool_fragments: dict[int, dict] = {}
         finish_reason = None
         for line in res.iter_lines():

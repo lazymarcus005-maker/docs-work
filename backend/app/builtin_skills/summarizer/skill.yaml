@@ -1,0 +1,27 @@
+id: summarizer
+name: Document Summarizer
+version: 1.0.0
+builtin: true
+enabled_by_default: true
+
+description: >
+  Summarize uploaded project context into a concise markdown briefing
+  with source references. Proves the skill→artifact path end to end.
+
+inputs:
+  - project_context
+  - user_instruction
+
+outputs:
+  - markdown_artifact
+
+tools:
+  - list_project_files
+  - search_project
+  - read_document
+  - write_artifact
+
+rules:
+  - never_invent_missing_information
+  - prefer_project_terminology
+  - cite_evidence_for_critical_claims

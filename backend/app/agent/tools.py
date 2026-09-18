@@ -22,6 +22,8 @@ class ToolContext:
     settings: Settings
     project_id: str
     selected_document_ids: list[str] = field(default_factory=list)
+    skill_id: str | None = None
+    skill_version: str | None = None
 
 
 @dataclass
@@ -158,3 +160,101 @@ def search_chunks(ctx: ToolContext, args: dict) -> dict:
         document_ids=ctx.selected_document_ids or None,
     )
     return {"chunks": results}
+
+
+# ----------------------------------------------- artifact tools (ticket #8)
+@register(
+    "list_outputs",
+    "List generated output artifacts in the project's outputs.",
+    {"type": "object", "properties": {}, "additionalProperties": False},
+)
+def list_outputs(ctx: ToolContext, args: dict) -> dict:
+    from ..artifacts import manager
+
+    return {"artifacts": manager.list_artifacts(ctx.conn, ctx.project_id)}
+
+
+@register(
+    "read_artifact",
+    "Read a generated artifact by file name.",
+    {
+        "type": "object",
+        "properties": {"file_name": {"type": "string"}},
+        "required": ["file_name"],
+        "additionalProperties": False,
+    },
+)
+def read_artifact(ctx: ToolContext, args: dict) -> dict:
+    from ..artifacts import manager
+
+    rows = manager.list_artifacts(ctx.conn, ctx.project_id)
+    match = next((a for a in rows if a["file_name"] == args["file_name"]), None)
+    if match is None:
+        return {"error": f"artifact not found: {args['file_name']}"}
+    version = manager.read_version(ctx.conn, ctx.project_id, match["id"])
+    return {"file_name": args["file_name"], "version": version["version"], "content": version["content"]}
+
+
+@register(
+    "write_artifact",
+    "Create a new generated document in the project outputs (creates version 1"
+    " if the file already exists as an artifact).",
+    {
+        "type": "object",
+        "properties": {
+            "file_name": {"type": "string"},
+            "content": {"type": "string"},
+            "source_context": {"type": "array"},
+        },
+        "required": ["file_name", "content"],
+        "additionalProperties": False,
+    },
+)
+def write_artifact(ctx: ToolContext, args: dict) -> dict:
+    from ..artifacts import manager
+
+    detail = manager.write_artifact(
+        ctx.conn, ctx.settings, ctx.project_id,
+        file_name=args["file_name"], content=args["content"],
+        skill_id=ctx.skill_id, skill_version=ctx.skill_version,
+        source_context=args.get("source_context") or [],
+        created_by="skill",
+    )
+    return {"artifact_id": detail["id"], "file_name": detail["file_name"],
+            "version": detail["current_version"]}
+
+
+@register(
+    "update_artifact",
+    "Revise an existing generated document (preserved as a new version).",
+    {
+        "type": "object",
+        "properties": {
+            "file_name": {"type": "string"},
+            "content": {"type": "string"},
+            "source_context": {"type": "array"},
+        },
+        "required": ["file_name", "content"],
+        "additionalProperties": False,
+    },
+)
+def update_artifact(ctx: ToolContext, args: dict) -> dict:
+    return write_artifact(ctx, args)
+
+
+@register(
+    "run_validator",
+    "Run the declared validators against a generated artifact and return the"
+    " results.",
+    {
+        "type": "object",
+        "properties": {"file_name": {"type": "string"}, "skill_id": {"type": "string"}},
+        "required": ["file_name"],
+        "additionalProperties": False,
+    },
+)
+def run_validator(ctx: ToolContext, args: dict) -> dict:
+    from ..skills.validator import validate_artifact
+
+    return validate_artifact(ctx.conn, ctx.settings, ctx.project_id,
+                             args["file_name"], args.get("skill_id"))
