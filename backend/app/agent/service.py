@@ -50,6 +50,7 @@ def stream_turn(
     selected_files: list,
     skill_id: str | None,
     profile: dict | None,
+    harness_type: str = "native",
 ) -> StreamingResponse:
     run_id = "run_pending"
 
@@ -80,6 +81,8 @@ def stream_turn(
         client = profiles.build_client(conn, secrets, profile, transport=transport)
         final_text, evidence_refs, run_status = "", [], "FAILED"
         try:
+            from ..agent.adapters import get_harness
+
             req = HarnessRequest(
                 conn=conn, settings=settings, client=client,
                 project_id=project_id, session_id=session_id,
@@ -90,7 +93,7 @@ def stream_turn(
                 max_tool_calls=settings.harness_max_tool_calls,
                 timeout_seconds=settings.harness_run_timeout_seconds,
             )
-            for event, data in NativeHarness().run(req):
+            for event, data in get_harness(harness_type).run(req):
                 if event == "run.started":
                     run_id = data["run_id"]
                     CANCEL_REGISTRY[run_id] = cancel

@@ -144,6 +144,12 @@ def chat(
     request: Request = None,
 ) -> StreamingResponse:
     require_project(conn, project_id)
+    from ..agent.adapters import HARNESS_TYPES
+
+    if (body.harness or "native") not in HARNESS_TYPES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"harness must be one of: {', '.join(HARNESS_TYPES)}")
     if not body.message.strip():
         raise HTTPException(status_code=422, detail="Message is required")
 
@@ -179,7 +185,7 @@ def chat(
     return service.stream_turn(
         request, conn, settings, secrets, project_id, session_id,
         user_message_id, body.message, body.selected_files or [],
-        body.skill_id, profile,
+        body.skill_id, profile, harness_type=body.harness or "native",
     )
 
 
