@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse
 
 from ..config import Settings
 from ..deps import get_app_settings, get_db
+from ..jobs import queue
 from ..storage import filesystem as fs
 from ..util import log_event, new_id, now_iso
 
@@ -138,6 +139,10 @@ def upload_files(
         )
         out.append({"file_id": fid, "name": info["safe_name"], "status": "NEW"})
         log_event(conn, "file.uploaded", project_id, {"file": info["safe_name"]})
+        queue.enqueue(
+            conn, project_id, "PARSE_DOCUMENT", document_id=fid,
+            priority=queue.PRIORITY_PARSE,
+        )
     conn.commit()
     return {"files": out}
 
