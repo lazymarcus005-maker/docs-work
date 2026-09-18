@@ -34,6 +34,14 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
       </header>
       <div className="workspace">
         <aside className="sidebar">
+          <h3>Workspace</h3>
+          <Link className={`item ${is("") ? "active-item" : ""}`} href={`/projects/${pid}`}>
+            💬 Chat
+          </Link>
+          <Link className={`item ${is("/files") ? "active-item" : ""}`} href={`/projects/${pid}/files`}>
+            ⚙ Processing
+          </Link>
+
           <h3>Context</h3>
           {files.map((f) => (
             <Link key={f.id} className="item" href={`/projects/${pid}/files`} title={`${f.name} (${f.status})`}>

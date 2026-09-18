@@ -107,6 +107,24 @@ def test_chat_llm_error_streams_run_failed(client):
     assert events[-1][1]["status"] == "FAILED"
 
 
+def test_assistant_message_persisted_before_run_completed_event(client):
+    """Ordering guarantee: when the client sees run.completed, reloading the
+    session already shows the final answer — navigation must never lose it."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return sse_response("answer that must survive navigation")
+
+    pid, _ = _setup_project_with_profile(client, handler)
+    events = _stream_events(client, pid, {"message": "q"})
+    assert events[-1][0] == "run.completed"
+
+    session_id = events[0][1]["session_id"]
+    messages = client.get(
+        f"/api/projects/{pid}/sessions/{session_id}/messages"
+    ).json()["messages"]
+    assert messages[-1]["role"] == "assistant"
+    assert messages[-1]["content"] == "answer that must survive navigation"
+
+
 def test_chat_survives_restart(client, settings):
     def handler(request):
         return sse_response("kept")

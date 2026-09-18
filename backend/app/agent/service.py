@@ -80,6 +80,7 @@ def stream_turn(
         transport = getattr(request.app.state, "llm_transport", None) if request else None
         client = profiles.build_client(conn, secrets, profile, transport=transport)
         final_text, evidence_refs, run_status = "", [], "FAILED"
+        persisted = False
         try:
             from ..agent.adapters import get_harness
 
@@ -102,11 +103,27 @@ def stream_turn(
                     final_text = data.get("content", "")
                     evidence_refs = data.get("evidence_refs", [])
                     run_status = data.get("status", "SUCCEEDED")
+                    # persist the answer BEFORE announcing completion, so a
+                    # client that reloads history on run.completed sees it
+                    if final_text:
+                        from ..util import new_id, now_iso
+
+                        conn.execute(
+                            "INSERT INTO messages (id, session_id, project_id,"
+                            " role, content, meta, created_at)"
+                            " VALUES (?, ?, ?, 'assistant', ?, ?, ?)",
+                            (new_id("msg"), session_id, project_id, final_text,
+                             json.dumps({"run_id": run_id,
+                                         "evidence_refs": evidence_refs}),
+                             now_iso()),
+                        )
+                        conn.commit()
+                        persisted = True
                 yield _sse(event, data)
         finally:
             CANCEL_REGISTRY.pop(run_id, None)
             client.close()
-            if final_text:
+            if final_text and not persisted:
                 from ..util import new_id, now_iso
 
                 conn.execute(

@@ -13,12 +13,14 @@ interface ChatMessage extends Message {
 export default function ChatPage() {
   const params = useParams();
   const pid = String(params.projectId);
+  const sessionKey = `cowork-session-${pid}`;
   const [sessions, setSessions] = useState<Session[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [runStatus, setRunStatus] = useState("");
   const [running, setRunning] = useState(false);
+  const runningRef = useRef(false);
   const [runId, setRunId] = useState<string | null>(null);
   const [files, setFiles] = useState<ProjectFile[]>([]);
   const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
@@ -29,19 +31,27 @@ export default function ChatPage() {
   const refreshSessions = useCallback(() => {
     api.listSessions(pid).then((r) => {
       setSessions(r.sessions);
-      setSessionId((cur) => cur || r.sessions[0]?.id || null);
+      // remember the chosen session across navigation within the workspace
+      setSessionId((cur) => cur
+        || sessionStorage.getItem(sessionKey)
+        || r.sessions[0]?.id
+        || null);
     }).catch((e) => setError(String(e)));
-  }, [pid]);
+  }, [pid, sessionKey]);
 
   useEffect(() => {
     refreshSessions();
     api.listFiles(pid).then((r) => setFiles(r.files)).catch(() => {});
   }, [pid, refreshSessions]);
 
+  // reload history when the selected session changes — but never mid-run,
+  // otherwise a reload would wipe the streaming answer off the screen
   useEffect(() => {
     if (!sessionId) return;
+    sessionStorage.setItem(sessionKey, sessionId);
+    if (runningRef.current) return;
     api.listMessages(pid, sessionId).then((r) => setMessages(r.messages)).catch(() => {});
-  }, [pid, sessionId]);
+  }, [pid, sessionId, sessionKey]);
 
   useEffect(() => {
     logRef.current?.scrollTo(0, logRef.current.scrollHeight);
@@ -52,6 +62,10 @@ export default function ChatPage() {
       case "run.started":
         setRunId(e.data.run_id === "run_pending" ? null : e.data.run_id);
         setRunStatus("Starting agent run…");
+        // adopt the session created for this run so reloads find the history
+        if (e.data.session_id) {
+          setSessionId((cur) => cur || e.data.session_id);
+        }
         break;
       case "context.search.started":
         setRunStatus("Searching project context…");
@@ -129,6 +143,7 @@ export default function ChatPage() {
       meta: { selected_files: selectedFiles }, created_at: "",
     }]);
     setRunning(true);
+    runningRef.current = true;
     setRunStatus("Thinking…");
     try {
       await api.chat(pid, {
@@ -141,6 +156,8 @@ export default function ChatPage() {
     } catch (e) {
       setError(String(e));
       setRunning(false);
+    } finally {
+      runningRef.current = false;
     }
   }
 
