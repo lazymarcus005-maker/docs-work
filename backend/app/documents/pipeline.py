@@ -66,16 +66,39 @@ def process_document(conn: sqlite3.Connection, settings: Settings, document_id: 
         if el["type"] == "image"
     )
     text_elements = [el for el in canonical["elements"] if el["type"] != "image"]
-    if needs_ocr and not text_elements:
-        msg = (
-            f"{doc['name']} could not be parsed.\n"
-            "Reason: The document contains scanned pages / images and OCR is disabled.\n"
-            "Actions: [Enable OCR] [Retry]"
-        )
-        _set_doc_status(conn, document_id, "FAILED", error=msg)
-        log_event(conn, "document.failed", project_id, {"file": doc["name"], "needs_ocr": True})
-        conn.commit()
-        return {"status": "FAILED", "error": msg, "needs_ocr": True}
+    if needs_ocr:
+        from . import ocr as ocr_mod
+
+        if ocr_mod.ocr_enabled(conn):
+            # §34: OCR activates only when needed; run it and re-parse the text
+            try:
+                ocr_text = ocr_mod.ocr_document(
+                    src,
+                    conn.execute("SELECT value FROM settings WHERE key='ocr_engine'").fetchone()
+                    and conn.execute("SELECT value FROM settings WHERE key='ocr_engine'").fetchone()["value"]
+                    or "tesseract",
+                )
+            except ocr_mod.OCRError as e:
+                msg = f"{doc['name']} could not be parsed.\nReason: {e}"
+                _set_doc_status(conn, document_id, "FAILED", error=msg)
+                conn.commit()
+                return {"status": "FAILED", "error": msg, "needs_ocr": True}
+            if ocr_text.strip():
+                canonical["elements"] = [
+                    {"type": "paragraph", "text": para.strip()}
+                    for para in ocr_text.split("\n\n") if para.strip()
+                ]
+                text_elements = canonical["elements"]
+        elif not text_elements:
+            msg = (
+                f"{doc['name']} could not be parsed.\n"
+                "Reason: The document contains scanned pages / images and OCR is disabled.\n"
+                "Actions: [Enable OCR] [Retry]"
+            )
+            _set_doc_status(conn, document_id, "FAILED", error=msg)
+            log_event(conn, "document.failed", project_id, {"file": doc["name"], "needs_ocr": True})
+            conn.commit()
+            return {"status": "FAILED", "error": msg, "needs_ocr": True}
 
     parsed_dir = fs.parsed_dir(settings.workspace_root, project_id)
     parsed_dir.mkdir(parents=True, exist_ok=True)

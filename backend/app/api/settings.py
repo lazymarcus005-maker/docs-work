@@ -80,6 +80,35 @@ def delete_llm_profile(
     profiles.delete_profile(conn, secrets, profile_id)
 
 
+@router.get("/processing")
+def get_processing_settings(conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    from ..documents import ocr as ocr_mod
+
+    row = conn.execute("SELECT value FROM settings WHERE key='ocr_engine'").fetchone()
+    return {
+        "ocr_enabled": ocr_mod.ocr_enabled(conn),
+        "ocr_engine": row["value"] if row else "tesseract",
+        "engine_available": ocr_mod.get_ocr_provider(
+            row["value"] if row else "tesseract").available(),
+    }
+
+
+class ProcessingSettingsIn(BaseModel):
+    ocr_enabled: bool
+    ocr_engine: str = "tesseract"
+
+
+@router.put("/processing")
+def put_processing_settings(
+    body: ProcessingSettingsIn,
+    conn: sqlite3.Connection = Depends(get_db),
+) -> dict:
+    from ..documents import ocr as ocr_mod
+
+    ocr_mod.set_ocr_enabled(conn, body.ocr_enabled, body.ocr_engine)
+    return get_processing_settings(conn)
+
+
 @router.get("/llm-profiles/{profile_id}")
 def get_llm_profile(
     profile_id: str, conn: sqlite3.Connection = Depends(get_db)
