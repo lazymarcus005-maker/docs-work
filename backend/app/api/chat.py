@@ -176,9 +176,9 @@ def chat(
     )
 
     run_id = new_id("run")
-    started = threading.Event()
 
     def generate():
+        nonlocal run_id
         yield _sse("run.started", {
             "run_id": run_id, "session_id": session_id,
             "user_message_id": user_message_id,
@@ -191,87 +191,55 @@ def chat(
             })
             return
 
-        conn.execute(
-            "INSERT INTO agent_runs (id, session_id, project_id, user_message_id,"
-            " harness_type, llm_profile_id, selected_skill, status, started_at,"
-            " updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'RUNNING', ?, ?)",
-            (run_id, session_id, project_id, user_message_id, body.harness,
-             profile["id"], body.skill_id, ts, ts),
-        )
-        conn.commit()
-        log_event(conn, "agent.run.started", project_id,
-                  {"run_id": run_id, "harness": body.harness})
-        conn.commit()
-
         cancel = threading.Event()
         CANCEL_REGISTRY[run_id] = cancel
-        history = _conversation_history(conn, session_id)
-        full: list[str] = []
-        try:
-            client = profiles.build_client(conn, secrets, profile, transport=llm_transport)
-            try:
-                for chunk in client.stream(history):
-                    if cancel.is_set():
-                        raise _Cancelled()
-                    if "delta" in chunk:
-                        full.append(chunk["delta"])
-                        yield _sse("assistant.delta", {"run_id": run_id, "delta": chunk["delta"]})
-                    elif "response" in chunk:
-                        pass  # final LLMResponse — content already streamed
-            finally:
-                client.close()
 
-            content = "".join(full)
-            _persist_assistant_message(conn, session_id, project_id, content, run_id)
-            conn.execute(
-                "UPDATE agent_runs SET status = 'SUCCEEDED', completed_at = ?,"
-                " updated_at = ? WHERE id = ?",
-                (now_iso(), now_iso(), run_id),
-            )
-            conn.commit()
-            log_event(conn, "agent.run.completed", project_id, {"run_id": run_id})
-            conn.commit()
-            yield _sse("run.completed", {"run_id": run_id, "session_id": session_id})
-        except _Cancelled:
-            conn.execute(
-                "UPDATE agent_runs SET status = 'CANCELLED', completed_at = ?,"
-                " updated_at = ? WHERE id = ?",
-                (now_iso(), now_iso(), run_id),
-            )
-            if full:
-                _persist_assistant_message(
-                    conn, session_id, project_id,
-                    "".join(full) + "\n\n*[cancelled]*", run_id,
-                )
-            conn.commit()
-            yield _sse("run.cancelled", {"run_id": run_id})
-        except LLMError as e:
-            conn.execute(
-                "UPDATE agent_runs SET status = 'FAILED', error_code = ?,"
-                " completed_at = ?, updated_at = ? WHERE id = ?",
-                (e.category, now_iso(), now_iso(), run_id),
-            )
-            conn.commit()
-            log_event(conn, "agent.run.failed", project_id,
-                      {"run_id": run_id, "category": e.category})
-            conn.commit()
-            yield _sse("run.failed", {
-                "run_id": run_id,
-                "message": f"The LLM call failed ({e.category}): {e}",
-                "actions": ["Check the LLM profile settings", "Test the connection in Settings"],
-            })
+        from ..agent.harness import HarnessRequest, NativeHarness
+
+        client = profiles.build_client(
+            conn, secrets, profile,
+            transport=getattr(request.app.state, "llm_transport", None)
+            if request else None,
+        )
+        req = HarnessRequest(
+            conn=conn,
+            settings=settings,
+            client=client,
+            project_id=project_id,
+            session_id=session_id,
+            user_message=body.message,
+            user_message_id=user_message_id,
+            selected_files=body.selected_files or [],
+            skill_id=body.skill_id,
+            cancel_event=cancel,
+            max_iterations=settings.harness_max_iterations,
+            max_tool_calls=settings.harness_max_tool_calls,
+            timeout_seconds=settings.harness_run_timeout_seconds,
+        )
+        final_text, evidence_refs, run_status = "", [], "FAILED"
+        try:
+            for event, data in NativeHarness().run(req):
+                if event == "run.started":
+                    run_id = data["run_id"]  # harness owns run identity
+                if event == "run.completed":
+                    final_text = data.get("content", "")
+                    evidence_refs = data.get("evidence_refs", [])
+                    run_status = data.get("status", "SUCCEEDED")
+                yield _sse(event, data)
         finally:
             CANCEL_REGISTRY.pop(run_id, None)
+            client.close()
+            if final_text:
+                _persist_assistant_message(
+                    conn, session_id, project_id, final_text,
+                    meta={"run_id": run_id, "evidence_refs": evidence_refs},
+                )
 
     return StreamingResponse(
         generate(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
-
-
-class _Cancelled(Exception):
-    pass
 
 
 @router.post("/runs/{run_id}/cancel")
@@ -306,11 +274,13 @@ def _conversation_history(conn: sqlite3.Connection, session_id: str) -> list[Cha
 
 
 def _persist_assistant_message(
-    conn: sqlite3.Connection, session_id: str, project_id: str, content: str, run_id: str
+    conn: sqlite3.Connection, session_id: str, project_id: str, content: str,
+    meta: dict | None = None,
 ) -> None:
     conn.execute(
         "INSERT INTO messages (id, session_id, project_id, role, content, meta,"
         " created_at) VALUES (?, ?, ?, 'assistant', ?, ?, ?)",
         (new_id("msg"), session_id, project_id, content,
-         json.dumps({"run_id": run_id}), now_iso()),
+         json.dumps(meta or {"run_id": None}), now_iso()),
     )
+    conn.commit()

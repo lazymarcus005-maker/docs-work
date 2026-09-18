@@ -119,7 +119,7 @@ def build_client(
     import json
 
     key = secrets.get(profile["api_key_ref"] or "") if profile.get("api_key_ref") else None
-    return OpenAICompatibleProvider(
+    client = OpenAICompatibleProvider(
         base_url=profile["base_url"],
         model=profile["model"],
         api_key=key,
@@ -130,6 +130,8 @@ def build_client(
         tls_verify=bool(profile["tls_verify"]),
         transport=transport,
     )
+    client.tool_calling_mode = profile["tool_calling_mode"] or "auto"
+    return client
 
 
 def public_profile(profile: dict) -> dict:

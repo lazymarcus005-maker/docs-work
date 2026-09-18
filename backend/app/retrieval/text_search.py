@@ -39,6 +39,10 @@ def text_search(
     params.append(limit)
     try:
         rows = conn.execute(sql, params).fetchall()
+        if not rows and " " in fts:
+            # AND across terms missed (e.g. compound tokens); widen to OR
+            or_query = " OR ".join(fts.split())
+            rows = conn.execute(sql, [or_query, *params[1:]]).fetchall()
     except sqlite3.OperationalError:
         # malformed FTS query — degrade to LIKE substring search
         like = f"%{query.strip()}%"
