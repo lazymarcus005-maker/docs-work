@@ -11,6 +11,9 @@ from typing import Optional
 from ..deps import get_db, get_secrets
 from ..llm import profiles
 from ..secrets import SecretStore
+from ..jev import JevDecisionClient, JevError
+from ..jev.client import MODEL_ID
+from ..jev import settings as jev_settings
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -184,3 +187,98 @@ def test_llm_profile(
     finally:
         client.close()
     return report
+
+
+class JevSettingsIn(BaseModel):
+    enabled: Optional[bool] = None
+    api_key: Optional[str] = None
+    clear_api_key: bool = False
+
+
+@router.get("/internal-tools/jev")
+def get_jev_settings(
+    conn: sqlite3.Connection = Depends(get_db),
+    secrets: SecretStore = Depends(get_secrets),
+) -> dict:
+    return jev_settings.public_settings(conn, secrets)
+
+
+@router.put("/internal-tools/jev")
+def put_jev_settings(
+    body: JevSettingsIn,
+    conn: sqlite3.Connection = Depends(get_db),
+    secrets: SecretStore = Depends(get_secrets),
+) -> dict:
+    if body.clear_api_key:
+        if body.api_key:
+            raise HTTPException(
+                status_code=422,
+                detail="Provide a new api_key or clear_api_key, not both",
+            )
+        if body.enabled is True:
+            raise HTTPException(
+                status_code=422,
+                detail="Jev cannot be enabled while clearing its API key",
+            )
+        jev_settings.set_enabled(conn, False)
+        try:
+            secrets.delete(jev_settings.SECRET_REF)
+        except Exception:
+            raise HTTPException(
+                status_code=500, detail="Could not remove the TypeSafe API key"
+            ) from None
+        return jev_settings.public_settings(conn, secrets)
+
+    if body.api_key:
+        try:
+            secrets.set(jev_settings.SECRET_REF, body.api_key)
+        except Exception:
+            raise HTTPException(
+                status_code=500, detail="Could not save the TypeSafe API key"
+            ) from None
+
+    if body.enabled is not None:
+        if body.enabled and not jev_settings.has_api_key(secrets):
+            raise HTTPException(
+                status_code=409,
+                detail="Add a TypeSafe API key before enabling Jev",
+            )
+        jev_settings.set_enabled(conn, body.enabled)
+
+    return jev_settings.public_settings(conn, secrets)
+
+
+@router.post("/internal-tools/jev/test")
+def test_jev_connection(
+    request: Request,
+    conn: sqlite3.Connection = Depends(get_db),
+    secrets: SecretStore = Depends(get_secrets),
+) -> dict:
+    api_key = secrets.get(jev_settings.SECRET_REF)
+    if not api_key:
+        raise HTTPException(
+            status_code=409, detail="Add a TypeSafe API key before testing Jev"
+        )
+    jev = JevDecisionClient(
+        api_key,
+        transport=getattr(request.app.state, "jev_transport", None),
+    )
+    try:
+        decision = jev.classify(
+            "Synthetic Jev connectivity check. No project or document data is included."
+        )
+        return {
+            "reachable": True,
+            "model": decision.model or MODEL_ID,
+            "latency_ms": decision.latency_ms,
+            "usage": decision.usage,
+        }
+    except JevError as exc:
+        return {
+            "reachable": False,
+            "model": MODEL_ID,
+            "latency_ms": exc.latency_ms,
+            "error": str(exc),
+        }
+    finally:
+        jev.close()

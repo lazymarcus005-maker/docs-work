@@ -13,6 +13,8 @@ from ..config import Settings
 from ..llm import profiles
 from ..secrets import SecretStore
 from .harness import HarnessRequest, NativeHarness
+from ..jev import JevDecisionClient
+from ..jev import settings as jev_settings
 
 # run_id -> threading.Event checked between loop steps for cancellation
 CANCEL_REGISTRY: dict[str, threading.Event] = {}
@@ -79,16 +81,30 @@ def stream_turn(
 
         transport = getattr(request.app.state, "llm_transport", None) if request else None
         client = profiles.build_client(conn, secrets, profile, transport=transport)
+        jev_client = None
         final_text, evidence_refs, run_status = "", [], "FAILED"
         persisted = False
         try:
             from ..agent.adapters import get_harness
+
+            if (harness_type == "native" and skill_id is None
+                    and jev_settings.is_enabled(conn)):
+                jev_key = secrets.get(jev_settings.SECRET_REF)
+                if jev_key:
+                    jev_client = JevDecisionClient(
+                        jev_key,
+                        transport=(
+                            getattr(request.app.state, "jev_transport", None)
+                            if request else None
+                        ),
+                    )
 
             req = HarnessRequest(
                 conn=conn, settings=settings, client=client,
                 project_id=project_id, session_id=session_id,
                 user_message=message, user_message_id=user_message_id,
                 selected_files=selected_files, skill_id=skill_id,
+                jev_client=jev_client,
                 cancel_event=cancel,
                 max_iterations=settings.harness_max_iterations,
                 max_tool_calls=settings.harness_max_tool_calls,
@@ -133,6 +149,8 @@ def stream_turn(
         finally:
             CANCEL_REGISTRY.pop(run_id, None)
             client.close()
+            if jev_client:
+                jev_client.close()
             if final_text and not persisted:
                 from ..util import new_id, now_iso
 

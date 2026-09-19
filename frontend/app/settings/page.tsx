@@ -2,7 +2,11 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
-import { api, LLMProfile } from "@/lib/api";
+import { api, JevSettings, JevTestResult, LLMProfile } from "@/lib/api";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 
 const EMPTY = {
   name: "", base_url: "", model: "", api_key: "", timeout_seconds: 120,
@@ -25,6 +29,12 @@ export default function SettingsPage() {
   const [form, setForm] = useState<Record<string, any>>({ ...EMPTY });
   const [editing, setEditing] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<Record<string, any> | null>(null);
+  const [jev, setJev] = useState<JevSettings | null>(null);
+  const [jevApiKey, setJevApiKey] = useState("");
+  const [jevTest, setJevTest] = useState<JevTestResult | null>(null);
+  const [jevBusy, setJevBusy] = useState(false);
+  const [jevError, setJevError] = useState("");
+  const [jevNotice, setJevNotice] = useState("");
   const [ocr, setOcr] = useState<OcrSettings | null>(null);
   const [limits, setLimits] = useState<Record<string, any> | null>(null);
   const [budgetDraft, setBudgetDraft] = useState<string>("");
@@ -33,6 +43,7 @@ export default function SettingsPage() {
 
   const refresh = useCallback(() => {
     api.profiles().then((r) => setProfiles(r.profiles)).catch((e) => setError(String(e)));
+    api.jevSettings().then(setJev).catch((e) => setJevError(String(e)));
     api.processingSettings().then((r) => setOcr(r as OcrSettings)).catch(() => {});
     api.limits().then((r) => {
       setLimits(r);
@@ -82,6 +93,40 @@ export default function SettingsPage() {
       setTestResult(await api.testProfile(id));
     } catch (e) {
       setError(String(e));
+    }
+  }
+
+  async function updateJev(body: { enabled?: boolean; api_key?: string; clear_api_key?: boolean }) {
+    setJevBusy(true);
+    setJevError("");
+    setJevNotice("");
+    setJevTest(null);
+    try {
+      const result = await api.saveJevSettings(body);
+      setJev(result);
+      if (body.api_key || body.clear_api_key) setJevApiKey("");
+      setJevNotice(body.clear_api_key ? "TypeSafe API key removed." : "Jev settings saved.");
+    } catch (e) {
+      setJevError(String(e));
+    } finally {
+      setJevBusy(false);
+    }
+  }
+
+  async function testJev() {
+    setJevBusy(true);
+    setJevError("");
+    setJevNotice("");
+    setJevTest(null);
+    try {
+      const result = await api.testJev();
+      setJevTest(result);
+      if (result.reachable) setJevNotice("TypeSafe connection verified.");
+      else setJevError(result.error || "TypeSafe connection failed.");
+    } catch (e) {
+      setJevError(String(e));
+    } finally {
+      setJevBusy(false);
     }
   }
 
@@ -142,6 +187,89 @@ export default function SettingsPage() {
             </div>
           )}
         </div>
+
+        <Card className="mb-4">
+          <CardHeader>
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <CardTitle>Internal tools · Jev</CardTitle>
+                <CardDescription className="mt-1">
+                  Optional request routing inside the harness. The main chat model still writes every response.
+                </CardDescription>
+              </div>
+              {jev && (
+                <span className={jev.enabled && jev.ready ? "pill ok" : "pill warn"}>
+                  {jev.enabled && jev.ready ? "Enabled" : "Disabled"}
+                </span>
+              )}
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-5">
+            {jev ? (
+              <>
+                <div className="flex flex-wrap items-center justify-between gap-4 rounded-lg border p-4">
+                  <div>
+                    <div className="font-medium">Use Jev for chat routing</div>
+                    <div className="text-sm text-muted-foreground">
+                      Jev is currently {jev.enabled ? "on" : "off"}; it will only auto-select an enabled skill at high confidence.
+                    </div>
+                  </div>
+                  <Switch
+                    aria-label="Enable Jev for chat routing"
+                    checked={jev.enabled}
+                    disabled={jevBusy || !jev.has_api_key}
+                    onCheckedChange={(enabled) => updateJev({ enabled })}
+                  />
+                </div>
+
+                <div className="grid gap-3 sm:grid-cols-[1fr_auto] sm:items-end">
+                  <label className="grid gap-2 text-sm font-medium">
+                    TypeSafe API key {jev.has_api_key && <span className="text-muted-foreground">(saved; leave blank to keep)</span>}
+                    <Input
+                      type="password"
+                      autoComplete="new-password"
+                      value={jevApiKey}
+                      onChange={(event) => setJevApiKey(event.target.value)}
+                      placeholder={jev.has_api_key ? "Key saved securely" : "Paste your TypeSafe API key"}
+                    />
+                  </label>
+                  <div className="flex flex-wrap gap-2">
+                    <Button disabled={jevBusy || !jevApiKey.trim()} onClick={() => updateJev({ api_key: jevApiKey.trim() })}>
+                      Save key
+                    </Button>
+                    <Button variant="outline" disabled={jevBusy || !jev.has_api_key} onClick={testJev}>
+                      Test connection
+                    </Button>
+                    {jev.has_api_key && (
+                      <Button variant="destructive" disabled={jevBusy} onClick={() => updateJev({ clear_api_key: true })}>
+                        Remove key
+                      </Button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+                  <span>Model</span>
+                  <code className="rounded bg-muted px-2 py-1 text-foreground">{jev.model}</code>
+                  <span>· API key {jev.has_api_key ? "configured" : "not configured"}</span>
+                </div>
+                <p className="text-sm text-muted-foreground">
+                  When enabled, the text you send in Chat is sent to TypeSafe for classification. The POC does not send document contents to Jev.
+                </p>
+                {jevTest && (
+                  <div className={jevTest.reachable ? "rounded-lg border border-green-600/30 bg-green-50 p-3 text-sm" : "rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm"}>
+                    {jevTest.reachable ? "Reachable" : "Not reachable"} · {jevTest.model} · {jevTest.latency_ms ?? "—"} ms
+                    {jevTest.error && <div className="mt-1">{jevTest.error}</div>}
+                  </div>
+                )}
+                {jevNotice && <div role="status" className="text-sm text-green-700">{jevNotice}</div>}
+                {jevError && <div role="alert" className="text-sm text-destructive">{jevError}</div>}
+              </>
+            ) : (
+              <div className="text-sm text-muted-foreground">Loading Jev settings…</div>
+            )}
+          </CardContent>
+        </Card>
 
         <div className="card">
           <h2 style={{ marginTop: 0, fontSize: 16 }}>

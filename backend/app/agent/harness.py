@@ -29,6 +29,8 @@ from .compaction import (compact_messages, context_usage, should_compact,
                          truncate_text, working_budget)
 from .context import build_context_pack, document_ids_for_files, render_context_block
 from .tools import ToolContext
+from ..jev import JevError
+from ..jev.routing import skill_for_decision
 
 CHUNK_ID_RE = re.compile(r"\bchk_[A-Za-z0-9_]+")
 
@@ -63,6 +65,7 @@ class HarnessRequest:
         user_message_id: str,
         selected_files: list[str] | None = None,
         skill_id: str | None = None,
+        jev_client=None,
         cancel_event: threading.Event | None = None,
         max_iterations: int = 12,
         max_tool_calls: int = 24,
@@ -83,6 +86,7 @@ class HarnessRequest:
         self.user_message_id = user_message_id
         self.selected_files = selected_files or []
         self.skill_id = skill_id
+        self.jev_client = jev_client
         self.cancel_event = cancel_event or threading.Event()
         self.max_iterations = max_iterations
         self.max_tool_calls = max_tool_calls
@@ -109,11 +113,45 @@ class NativeHarness:
 
     def run(self, req: HarnessRequest) -> Iterator[tuple[str, dict]]:
         conn, project_id = req.conn, req.project_id
+        jev_event = None
+        if req.jev_client is not None and not req.skill_id:
+            try:
+                decision = req.jev_client.classify(req.user_message)
+                skill_id = skill_for_decision(conn, project_id, decision)
+                if skill_id:
+                    req.skill_id = skill_id
+                jev_event = {
+                    "status": "classified",
+                    "model": decision.model,
+                    "category": decision.category,
+                    "confidence": decision.confidence,
+                    "latency_ms": decision.latency_ms,
+                    "usage": decision.usage,
+                    "route": skill_id or "native_harness",
+                }
+            except JevError as exc:
+                jev_event = {
+                    "status": "fallback",
+                    "error_code": str(exc.status_code or "jev_unavailable"),
+                    "latency_ms": exc.latency_ms,
+                    "route": "native_harness",
+                }
+            except Exception:  # Jev must not break the existing chat flow.
+                jev_event = {
+                    "status": "fallback",
+                    "error_code": "jev_internal_error",
+                    "route": "native_harness",
+                }
+
         run_id = run_state.create_run(
             conn, project_id, req.session_id, req.user_message_id,
             self.harness_type, llm_profile_id=None,
             selected_skill=req.skill_id,
         )
+        if jev_event:
+            jev_event["run_id"] = run_id
+            log_event(conn, "agent.jev.decision", project_id, jev_event)
+            conn.commit()
         yield _sse_pair("run.started", {"run_id": run_id, "session_id": req.session_id})
         log_event(conn, "agent.run.started", project_id,
                   {"run_id": run_id, "harness": self.harness_type})

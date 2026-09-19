@@ -115,6 +115,21 @@ export interface LLMProfile {
   timeout_seconds: number;
 }
 
+export interface JevSettings {
+  enabled: boolean;
+  has_api_key: boolean;
+  ready: boolean;
+  model: string;
+}
+
+export interface JevTestResult {
+  reachable: boolean;
+  model: string;
+  latency_ms: number | null;
+  usage?: { input_tokens?: number; output_tokens?: number };
+  error?: string;
+}
+
 export interface RunEvent {
   event: string;
   data: Record<string, any>;
@@ -255,6 +270,13 @@ export const api = {
   deleteProfile: (id: string) => req<void>(`/api/settings/llm-profiles/${id}`, { method: "DELETE" }),
   testProfile: (id: string) =>
     req<Record<string, any>>(`/api/settings/llm-profiles/${id}/test`, { method: "POST" }),
+  jevSettings: () => req<JevSettings>("/api/settings/internal-tools/jev"),
+  saveJevSettings: (body: {
+    enabled?: boolean; api_key?: string; clear_api_key?: boolean;
+  }) => req<JevSettings>("/api/settings/internal-tools/jev", {
+    method: "PUT", body: JSON.stringify(body),
+  }),
+  testJev: () => req<JevTestResult>("/api/settings/internal-tools/jev/test", { method: "POST" }),
   processingSettings: () => req<Record<string, any>>("/api/settings/processing"),
   saveProcessingSettings: (body: Record<string, unknown>) =>
     req<Record<string, any>>("/api/settings/processing", { method: "PUT", body: JSON.stringify(body) }),

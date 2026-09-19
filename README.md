@@ -44,7 +44,25 @@ Runtime data (SQLite database, project workspaces, secrets) lives under
 ```bash
 ./.venv/bin/pytest backend/tests
 cd frontend && npm run build   # typechecks + builds
+cd frontend && npm test       # Settings interaction tests
 ```
+
+## Jev routing evaluation
+
+Configure a TypeSafe API key in Settings and choose a default chat LLM profile.
+Review the sample labels in `backend/app/jev/evaluation_cases.json`; the sample
+is marked `human_reviewed: false`, so its report cannot pass the acceptance gate
+until a person reviews the prompts and labels and changes that flag to `true`.
+
+Run the live comparison from the repository root:
+
+```bash
+PYTHONPATH=backend .venv/bin/python -m app.jev.evaluation
+```
+
+The command sends each sample request to TypeSafe and the configured chat LLM,
+then writes a report to `data/jev-evaluation/latest.md`. The report contains
+case IDs and predictions, not the request text or API credentials.
 
 ## Architecture in one line
 
