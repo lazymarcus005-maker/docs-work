@@ -45,7 +45,7 @@ export default function OutputsPage() {
     <div className="chatlog" style={{ overflowY: "auto" }}>
       <div style={{ maxWidth: 920, margin: "0 auto" }} className="grid2">
         <div className="card">
-          <h2 style={{ marginTop: 0, fontSize: 16 }}>Generated Outputs</h2>
+          <h2 style={{ marginTop: 0, fontSize: 16 }}>Artifacts</h2>
           <ul className="list">
             {artifacts.map((a) => (
               <li key={a.id}>
@@ -59,7 +59,7 @@ export default function OutputsPage() {
                 {a.skill_id && <span className="muted">by {a.skill_id}</span>}
               </li>
             ))}
-            {artifacts.length === 0 && <li className="muted">No outputs yet — run a skill from chat.</li>}
+            {artifacts.length === 0 && <li className="muted">No artifacts yet — start a skill run in Cowork.</li>}
           </ul>
         </div>
 

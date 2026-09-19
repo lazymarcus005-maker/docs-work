@@ -94,7 +94,7 @@ export default function MemoryPage() {
             ))}
             {memories.length === 0 && (
               <li className="muted">
-                No memories yet. Tell the agent "จำไว้ว่า…" in chat, or add one above.
+                No memories yet. Tell your coworker "จำไว้ว่า…", or add one above.
               </li>
             )}
           </ul>

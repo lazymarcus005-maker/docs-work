@@ -63,7 +63,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
 
     from .api import (artifacts, chat, files, health, jobs, knowledge, memories,
-                      projects, search, settings as settings_api, skills, transfer)
+                      projects, search, settings as settings_api, skills, tasks,
+                      transfer)
 
     app.include_router(health.router)
     app.include_router(projects.router)
@@ -73,6 +74,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(jobs.router)
     app.include_router(chat.router)
     app.include_router(skills.router)
+    app.include_router(tasks.router)
     app.include_router(artifacts.router)
     app.include_router(knowledge.router)
     app.include_router(memories.router)

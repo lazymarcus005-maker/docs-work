@@ -173,6 +173,18 @@ def chat(
     conn.execute(
         "UPDATE sessions SET updated_at = ? WHERE id = ?", (ts, session_id)
     )
+    session_title = conn.execute(
+        "SELECT title FROM sessions WHERE id = ?", (session_id,),
+    ).fetchone()
+    if session_title and session_title["title"].strip().lower() in ("new chat", "new task"):
+        title = body.message.strip().splitlines()[0]
+        if title.startswith("/"):
+            _command, _space, rest = title.partition(" ")
+            title = rest.strip() or " ".join(body.message.strip().splitlines()[1:])
+        title = " ".join(title.split())[:64] or "Project work"
+        conn.execute(
+            "UPDATE sessions SET title = ? WHERE id = ?", (title, session_id),
+        )
     conn.commit()
 
     profile = (

@@ -21,6 +21,12 @@ from .loader import Skill
 def skill_system_prompt(req, skill: Skill, instruction: str) -> str:
     rules = "\n".join(f"- {r}" for r in skill.rules) or "- (none)"
     steps = "\n".join(f"{i}. {s}" for i, s in enumerate(skill.workflow, 1)) or "(free-form)"
+    skill_instructions = skill.prompt.strip() or "(none)"
+    output_rule = (
+        "Write your output as a file with the write_artifact tool before finishing."
+        if "write_artifact" in skill.tools
+        else "Return the requested output in the final response; do not claim to have created an artifact."
+    )
     project = req.conn.execute(
         "SELECT instruction FROM projects WHERE id = ?", (req.project_id,)
     ).fetchone()
@@ -30,14 +36,14 @@ def skill_system_prompt(req, skill: Skill, instruction: str) -> str:
         f"You are executing the '{skill.name}' skill (v{skill.version}) inside the "
         f"project agent run.\n\n"
         f"Skill description: {skill.description}\n\n"
+        f"Skill instructions:\n{skill_instructions}\n\n"
         f"Skill rules:\n{rules}\n\n"
         f"Skill workflow:\n{steps}\n\n"
         f"Project instruction: {(project['instruction'] if project else '') or '(none)'}\n\n"
         "Project memory (durable facts — respect, do not contradict):\n"
         f"{render_memory_block(req.conn, req.project_id)}\n\n"
         f"Allowed tools: {', '.join(skill.tools) or '(none)'}.\n"
-        "Write your output as a file with the write_artifact tool before finishing. "
-        "Cite chunk ids for important claims.\n"
+        f"{output_rule} Cite chunk ids for important claims.\n"
     )
 
 
@@ -100,6 +106,7 @@ def execute_skill_gen(
             break
 
         for tc in response.tool_calls:
+            yield ("tool.started", {"run_id": run_id, "tool": tc.name})
             if escalated and tc.name in ("write_artifact", "update_artifact", "run_validator"):
                 # fix-attempt cap reached: no more blind retries (anti-pattern:
                 # infinite fix loop) — the escalation is already queued
@@ -131,6 +138,14 @@ def execute_skill_gen(
                             "attempts": validation_failures,
                             "file": args.get("file_name", ""),
                         })
+            summary_text = observation.get("summary") or observation.get("file_name")
+            if not summary_text:
+                summary_text = observation.get("error") or "Completed"
+            yield ("tool.completed", {
+                "run_id": run_id, "tool": tc.name,
+                "summary": str(summary_text)[:240],
+                "error": bool(observation.get("error")),
+            })
             messages.append(ChatMessage(role="assistant", content=None, tool_calls=[tc]))
             messages.append(ChatMessage(
                 role="tool", tool_call_id=tc.id, name=tc.name,

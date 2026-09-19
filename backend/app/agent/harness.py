@@ -22,7 +22,7 @@ import time
 from typing import Any, Iterator
 
 from ..config import Settings
-from ..llm.base import ChatMessage, LLMClient, LLMResponse, ToolCall
+from ..llm.base import ChatMessage, LLMClient, LLMError, LLMResponse, ToolCall
 from ..util import log_event
 from . import run_state, spend, tools as tools_mod
 from .compaction import (compact_messages, context_usage, should_compact,
@@ -100,6 +100,8 @@ class HarnessRequest:
         self.observed_prompt_tokens: int | None = None
         self.total_prompt_tokens = 0
         self.total_completion_tokens = 0
+        self.work_plan_id: str | None = None
+        self.context_sources: list[str] = []
 
 
 def _sse_pair(event: str, data: dict):
@@ -196,6 +198,27 @@ class NativeHarness:
             "sources": [s["document"] for s in pack["sources"]],
             "truncated": pack["truncated"],
         })
+        req.context_sources = [s["document"] for s in pack["sources"]]
+
+        if not req.skill_id:
+            plan = run_state.resume_waiting_plan(
+                conn, project_id, req.session_id, run_id,
+            )
+            if plan:
+                req.work_plan_id = plan["id"]
+                yield _sse_pair("plan.resumed", {"run_id": run_id, "plan": plan})
+
+        if req.skill_id:
+            plan = _prepare_skill_plan(
+                req, run_id, req.skill_id, req.user_message,
+                [s["document"] for s in pack["sources"]],
+            )
+            if plan:
+                yield _sse_pair("plan.created", {"run_id": run_id, "plan": plan})
+                yield _sse_pair("tasks.created", {
+                    "run_id": run_id, "plan_id": plan["id"],
+                    "tasks": plan["tasks"],
+                })
 
         project = conn.execute(
             "SELECT instruction FROM projects WHERE id = ?", (project_id,)
@@ -225,10 +248,6 @@ class NativeHarness:
         messages.append(ChatMessage(role="user", content=req.user_message))
         mode = _tool_mode(req)
 
-        # explicit skill invocation runs before the free loop (spec §54)
-        if req.skill_id:
-            yield from _invoke_skill(req, tool_ctx, run_id, req.skill_id,
-                                     req.user_message, messages)
         final_text = ""
         status = "SUCCEEDED"
         error_code = None
@@ -236,6 +255,13 @@ class NativeHarness:
         tool_calls_total = 0
 
         try:
+            # Explicit and Jev-routed skill calls use the same error boundary
+            # as the regular harness loop so provider failures become events.
+            if req.skill_id:
+                yield from _run_skill_with_plan(
+                    req, tool_ctx, run_id, req.skill_id, req.user_message, messages,
+                )
+
             while True:
                 if req.cancel_event.is_set():
                     raise StopRun("cancelled")
@@ -346,9 +372,63 @@ class NativeHarness:
                     "message": f"The agent run stopped: {e.reason}.",
                     "actions": ["Retry the request", "Raise the harness limits in settings"],
                 })
+        except LLMError as e:
+            status, error_code = "FAILED", f"llm_{e.category}"
+            failures = {
+                "auth": (
+                    "The LLM provider rejected the configured credentials.",
+                    ["Check the API key in Settings → LLM profiles"],
+                ),
+                "rate_limit": (
+                    "The LLM provider rate limit or usage quota is exhausted.",
+                    ["Check provider usage or switch to another LLM profile", "Retry after the provider limit resets"],
+                ),
+                "timeout": (
+                    "The LLM provider timed out while handling this request.",
+                    ["Retry the request", "Check the provider status"],
+                ),
+                "connection": (
+                    "The LLM provider could not be reached.",
+                    ["Check the provider status and profile URL", "Retry the request"],
+                ),
+            }
+            message, actions = failures.get(e.category, (
+                "The LLM provider could not complete this request.",
+                ["Check the LLM profile and provider status", "Retry the request"],
+            ))
+            yield _sse_pair("run.failed", {
+                "run_id": run_id, "message": message, "actions": actions,
+            })
         except Exception as e:  # noqa: BLE001 — surfaced as run.failed
             status, error_code = "FAILED", "internal_error"
             yield _sse_pair("run.failed", {"run_id": run_id, "message": str(e)})
+
+        if req.work_plan_id:
+            if status == "WAITING_USER":
+                current = conn.execute(
+                    "SELECT step_id FROM agent_tasks WHERE plan_id = ?"
+                    " AND status IN ('running', 'completed')"
+                    " ORDER BY CASE status WHEN 'running' THEN 0 ELSE 1 END,"
+                    " task_order DESC LIMIT 1", (req.work_plan_id,),
+                ).fetchone()
+                if current:
+                    task = run_state.update_plan_task(
+                        conn, req.work_plan_id, current["step_id"], "needs_input",
+                        error=final_text,
+                    )
+                    if task:
+                        yield _sse_pair("task.updated", {"run_id": run_id, "task": task})
+            else:
+                run_state.finish_skill_plan(
+                    conn, req.work_plan_id, status == "SUCCEEDED",
+                    cancelled=status == "CANCELLED",
+                )
+            plan = run_state.get_plan(conn, req.work_plan_id)
+            if plan:
+                yield _sse_pair("tasks.updated", {
+                    "run_id": run_id, "plan_id": req.work_plan_id,
+                    "tasks": plan["tasks"],
+                })
 
         run_state.update_run(
             conn, run_id, status=status, error_code=error_code,
@@ -488,6 +568,67 @@ def _chunk(text: str, size: int = 64):
 
 
 # ------------------------------------------------------------ execution
+_PLAN_STEP_BY_TOOL = {
+    "list_project_files": "collect_context",
+    "search_project": "analyze_sources",
+    "read_document": "analyze_sources",
+    "search_knowledge": "analyze_sources",
+    "write_artifact": "generate_or_patch_artifact",
+    "update_artifact": "generate_or_patch_artifact",
+    "run_validator": "validate_structure",
+}
+
+
+def _prepare_skill_plan(req, run_id: str, skill_id: str, goal: str,
+                        sources: list[str]) -> dict | None:
+    plan = run_state.create_skill_plan(
+        req.conn, run_id, req.project_id, req.session_id,
+        skill_id, goal, sources,
+    )
+    if plan:
+        req.work_plan_id = plan["id"]
+    return plan
+
+
+def _run_skill_with_plan(req, tool_ctx, run_id, skill_id, instruction,
+                         messages) -> Iterator[tuple[str, dict]]:
+    if not req.work_plan_id:
+        plan = _prepare_skill_plan(
+            req, run_id, skill_id, instruction, req.context_sources,
+        )
+        if plan:
+            yield _sse_pair("plan.created", {"run_id": run_id, "plan": plan})
+            yield _sse_pair("tasks.created", {
+                "run_id": run_id, "plan_id": plan["id"], "tasks": plan["tasks"],
+            })
+
+    for event, data in _invoke_skill(
+        req, tool_ctx, run_id, skill_id, instruction, messages,
+    ):
+        step_id = _PLAN_STEP_BY_TOOL.get(data.get("tool"))
+        if req.work_plan_id and step_id and event == "tool.started":
+            for task in run_state.activate_plan_step(req.conn, req.work_plan_id, step_id):
+                yield _sse_pair("task.updated", {"run_id": run_id, "task": task})
+        elif req.work_plan_id and step_id and event == "tool.completed":
+            summary = data.get("summary", "")
+            for task in run_state.complete_plan_step(
+                req.conn, req.work_plan_id, step_id,
+                error=summary if data.get("error") else None,
+                artifact_ref=summary if step_id == "generate_or_patch_artifact" and not data.get("error") else None,
+            ):
+                yield _sse_pair("task.updated", {"run_id": run_id, "task": task})
+        if (req.work_plan_id and event == "skill.completed"
+                and data.get("error") != "cancelled"):
+            run_state.finish_skill_plan(req.conn, req.work_plan_id, not bool(data.get("error")))
+            plan = run_state.get_plan(req.conn, req.work_plan_id)
+            if plan:
+                yield _sse_pair("tasks.updated", {
+                    "run_id": run_id, "plan_id": req.work_plan_id,
+                    "tasks": plan["tasks"],
+                })
+        yield event, data
+
+
 def _invoke_skill(
     req: HarnessRequest,
     tool_ctx: ToolContext,
@@ -545,8 +686,8 @@ def _execute_tool(
     if name == "run_skill":
         skill_id = args.get("skill") or ""
         observation = {}
-        for ev in _invoke_skill(req, tool_ctx, run_id, skill_id,
-                                args.get("instruction") or req.user_message, messages):
+        for ev in _run_skill_with_plan(req, tool_ctx, run_id, skill_id,
+                                       args.get("instruction") or req.user_message, messages):
             if ev[0] == "skill.completed":
                 observation = ev[1]
             yield ev

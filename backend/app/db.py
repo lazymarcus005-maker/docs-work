@@ -185,6 +185,41 @@ CREATE TABLE IF NOT EXISTS agent_runs (
 );
 CREATE INDEX IF NOT EXISTS idx_runs_session ON agent_runs(session_id);
 
+CREATE TABLE IF NOT EXISTS work_plans (
+  id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL UNIQUE REFERENCES agent_runs(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  skill_id TEXT,
+  goal TEXT NOT NULL,
+  summary TEXT NOT NULL DEFAULT '',
+  version INTEGER NOT NULL DEFAULT 1,
+  sources TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_work_plans_project ON work_plans(project_id, updated_at);
+CREATE INDEX IF NOT EXISTS idx_work_plans_session ON work_plans(session_id, updated_at);
+
+CREATE TABLE IF NOT EXISTS agent_tasks (
+  id TEXT PRIMARY KEY,
+  plan_id TEXT NOT NULL REFERENCES work_plans(id) ON DELETE CASCADE,
+  step_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'pending',
+  task_order INTEGER NOT NULL,
+  source_refs TEXT NOT NULL DEFAULT '[]',
+  artifact_refs TEXT NOT NULL DEFAULT '[]',
+  started_at TEXT,
+  completed_at TEXT,
+  reason TEXT,
+  error TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_tasks_plan ON agent_tasks(plan_id, task_order);
+
 CREATE TABLE IF NOT EXISTS llm_profiles (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,

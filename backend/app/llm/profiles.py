@@ -1,8 +1,10 @@
 """LLM profile storage + client resolution (spec §32.1, §41)."""
 from __future__ import annotations
 
+import json
 import sqlite3
 from typing import Any
+from urllib.parse import urlsplit
 
 from ..secrets import SecretStore
 from .openai_compatible import OpenAICompatibleProvider
@@ -115,17 +117,28 @@ def build_client(
     secrets: SecretStore,
     profile: dict,
     transport=None,
+    session_id: str | None = None,
 ) -> OpenAICompatibleProvider:
     import json
 
     key = secrets.get(profile["api_key_ref"] or "") if profile.get("api_key_ref") else None
+    custom_headers = json.loads(profile["custom_headers"] or "{}")
+    endpoint = urlsplit(profile["base_url"])
+    if endpoint.hostname == "opencode.ai" and endpoint.path.startswith("/zen/go/"):
+        if not any(name.lower() == "user-agent" for name in custom_headers):
+            custom_headers["User-Agent"] = "local-cowork-knowledge-workspace/0.1"
+        if session_id:
+            for name in list(custom_headers):
+                if name.lower() == "x-opencode-session":
+                    del custom_headers[name]
+            custom_headers["x-opencode-session"] = session_id
     client = OpenAICompatibleProvider(
         base_url=profile["base_url"],
         model=profile["model"],
         api_key=key,
         timeout_seconds=profile["timeout_seconds"],
         max_output_tokens=profile["max_output_tokens"],
-        custom_headers=json.loads(profile["custom_headers"] or "{}"),
+        custom_headers=custom_headers,
         retry_count=profile["retry_count"],
         tls_verify=bool(profile["tls_verify"]),
         transport=transport,
@@ -138,6 +151,11 @@ def public_profile(profile: dict) -> dict:
     """Masked metadata only — the API key itself never leaves the store."""
     out = dict(profile)
     out.pop("api_key_ref", None)
+    try:
+        custom_headers = json.loads(out.get("custom_headers") or "{}")
+        out["custom_headers"] = custom_headers if isinstance(custom_headers, dict) else {}
+    except (TypeError, json.JSONDecodeError):
+        out["custom_headers"] = {}
     for key in ("is_default", "streaming_enabled", "tls_verify"):
         out[key] = bool(out.get(key))
     out["has_api_key"] = bool(profile.get("api_key_ref"))

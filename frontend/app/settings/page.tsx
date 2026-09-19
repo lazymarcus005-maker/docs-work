@@ -161,7 +161,15 @@ export default function SettingsPage() {
                                 timeout_seconds: p.timeout_seconds, is_default: p.is_default });
                     }}>Edit</button>{" "}
                     <button className="btn small secondary" onClick={async () => {
-                      await api.saveProfile({ ...p, is_default: true }, p.id); refresh();
+                      setError("");
+                      setNotice("");
+                      try {
+                        await api.saveProfile({ ...p, is_default: true }, p.id);
+                        setNotice(`${p.name} is now the default profile.`);
+                        refresh();
+                      } catch (e) {
+                        setError(e instanceof Error ? e.message : String(e));
+                      }
                     }}>Set default</button>{" "}
                     <button className="btn small" onClick={() => test(p.id)}>Test</button>{" "}
                     <button className="btn small danger" onClick={async () => {

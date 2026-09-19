@@ -342,6 +342,40 @@ def test_jev_failure_falls_back_to_existing_chat_flow(client):
     assert KEY not in response.text
 
 
+def test_jev_routed_skill_llm_rate_limit_becomes_run_failed_event(client):
+    project_id = _chat_setup(client)
+    client.put(
+        "/api/settings/internal-tools/jev",
+        json={"api_key": KEY, "enabled": True},
+    )
+    client.app.state.jev_transport = _jev_transport("business_analysis")
+    client.app.state.llm_transport = httpx.MockTransport(
+        lambda _request: httpx.Response(
+            429, json={"error": {"message": "weekly quota exhausted"}}
+        )
+    )
+    # Avoid waiting through the provider retry backoff; the response shape is
+    # the same rate-limit failure observed from the live provider.
+    client.app.state.conn.execute("UPDATE llm_profiles SET retry_count = 0")
+    client.app.state.conn.commit()
+
+    response = client.post(
+        f"/api/projects/{project_id}/chat",
+        json={"message": "Create requirements from the source files"},
+    )
+
+    assert response.status_code == 200
+    assert "skill.started" in response.text
+    assert "event: run.failed" in response.text
+    assert "provider rate limit or usage quota is exhausted" in response.text
+    assert "weekly quota exhausted" not in response.text
+    run = client.app.state.conn.execute(
+        "SELECT status, error_code FROM agent_runs ORDER BY started_at DESC LIMIT 1"
+    ).fetchone()
+    assert run["status"] == "FAILED"
+    assert run["error_code"] == "llm_rate_limit"
+
+
 def test_jev_route_requires_high_confidence_and_enabled_skill(client):
     project_id = _chat_setup(client)
     conn = client.app.state.conn

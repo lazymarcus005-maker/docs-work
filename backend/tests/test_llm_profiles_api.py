@@ -74,6 +74,71 @@ def test_test_connection_reports_capabilities(client):
     app.state.llm_transport = None
 
 
+def test_opencode_go_sends_app_user_agent_and_stable_session_header(client):
+    profile = client.post("/api/settings/llm-profiles", json={
+        **PROFILE,
+        "name": "OpenCode Go",
+        "base_url": "https://opencode.ai/zen/go/v1",
+        "model": "deepseek-v4-flash",
+    }).json()
+    project_id = client.post("/api/projects", json={"name": "OpenCode Go"}).json()["id"]
+    session_id = client.post(
+        f"/api/projects/{project_id}/sessions", json={"title": "OpenCode Go test"}
+    ).json()["id"]
+    requests = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        body = (
+            'data: {"choices":[{"delta":{"content":"ok"}}]}\n\n'
+            'data: [DONE]\n\n'
+        )
+        return httpx.Response(
+            200, content=body.encode(),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    client.app.state.llm_transport = httpx.MockTransport(handler)
+    for message in ("first turn", "second turn"):
+        response = client.post(
+            f"/api/projects/{project_id}/chat",
+            json={"session_id": session_id, "llm_profile_id": profile["id"], "message": message},
+        )
+        assert response.status_code == 200
+        assert "event: run.completed" in response.text
+
+    assert len(requests) == 2
+    assert all(r.headers["user-agent"] == "local-cowork-knowledge-workspace/0.1" for r in requests)
+    assert all(r.headers["x-opencode-session"] == session_id for r in requests)
+
+
+def test_opencode_go_connection_probe_includes_session_header(client):
+    profile = client.post("/api/settings/llm-profiles", json={
+        **PROFILE,
+        "base_url": "https://opencode.ai/zen/go/v1",
+        "model": "deepseek-v4-flash",
+    }).json()
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if request.url.path.endswith("/models"):
+            return httpx.Response(200, json={"data": []})
+        return httpx.Response(200, json={
+            "choices": [{"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}]
+        })
+
+    client.app.state.llm_transport = httpx.MockTransport(handler)
+    report = client.post(
+        f"/api/settings/llm-profiles/{profile['id']}/test"
+    ).json()
+
+    assert report["model_callable"] is True
+    assert len(seen) == 2
+    assert all(r.headers["user-agent"] == "local-cowork-knowledge-workspace/0.1" for r in seen)
+    assert all(r.headers["x-opencode-session"] == f"connection-test-{profile['id']}" for r in seen)
+
+
 def test_key_survives_restart_and_still_masks(client, settings):
     pid = client.post("/api/settings/llm-profiles", json=PROFILE).json()["id"]
 

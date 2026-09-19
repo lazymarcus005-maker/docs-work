@@ -80,6 +80,20 @@ def test_txt_pipeline_and_status_lifecycle(client):
     assert search["results"]
 
 
+def test_search_finds_hyphenated_identifier(client):
+    pid = client.post("/api/projects", json={"name": "P"}).json()["id"]
+    content = b"Synthetic test marker: COBALT-ORCHID-731."
+    fid = _upload(client, pid, "identifiers.txt", content).json()["files"][0]["file_id"]
+    _wait_status(client, pid, fid, "READY")
+
+    search = client.post(
+        f"/api/projects/{pid}/search", json={"query": "COBALT-ORCHID-731"}
+    ).json()
+
+    assert search["results"], "hyphenated identifiers should match indexed terms"
+    assert "COBALT-ORCHID-731" in search["results"][0]["text"]
+
+
 def test_scanned_pdf_fails_actionably_with_enable_ocr(client):
     import pypdf
 

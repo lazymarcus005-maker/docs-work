@@ -7,10 +7,9 @@ import sqlite3
 
 
 def _fts_query(query: str) -> str:
-    """Build a tolerant prefix query: 'auth flow' -> 'auth* flow*'."""
-    terms = [t for t in re.split(r"\s+", query.strip()) if t]
-    escaped = [re.sub(r"[^\w]", "", t) for t in terms]
-    return " ".join(f'"{t}"*' for t in escaped if t)
+    """Build a tolerant prefix query, treating punctuation as a word boundary."""
+    terms = re.findall(r"[^\W_]+", query, flags=re.UNICODE)
+    return " ".join(f'"{term}"*' for term in terms)
 
 
 def text_search(

@@ -181,7 +181,10 @@ def test_llm_profile(
 ) -> dict:
     p = _get(conn, profile_id)
     transport = getattr(request.app.state, "llm_transport", None)
-    client = profiles.build_client(conn, secrets, p, transport=transport)
+    client = profiles.build_client(
+        conn, secrets, p, transport=transport,
+        session_id=f"connection-test-{profile_id}",
+    )
     try:
         report = client.health()
     finally:

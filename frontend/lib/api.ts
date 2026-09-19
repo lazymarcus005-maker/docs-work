@@ -70,6 +70,11 @@ export interface Skill {
   description: string;
 }
 
+export interface SkillTool {
+  name: string;
+  description: string;
+}
+
 export interface Entity {
   id: string;
   type: string;
@@ -107,12 +112,19 @@ export interface Evidence {
 export interface LLMProfile {
   id: string;
   name: string;
+  provider_type?: string;
   base_url: string;
   model: string;
   is_default: boolean;
   has_api_key: boolean;
   tool_calling_mode: string;
   timeout_seconds: number;
+  max_output_tokens?: number | null;
+  context_window_override?: number | null;
+  streaming_enabled?: boolean;
+  custom_headers?: Record<string, string>;
+  retry_count?: number;
+  tls_verify?: boolean;
 }
 
 export interface JevSettings {
@@ -135,18 +147,93 @@ export interface RunEvent {
   data: Record<string, any>;
 }
 
+export type TaskStatus = "pending" | "running" | "completed" | "needs_input" | "failed" | "skipped";
+
+export interface WorkTask {
+  id: string;
+  step_id: string;
+  title: string;
+  description: string;
+  status: TaskStatus;
+  order: number;
+  source_refs: string[];
+  artifact_refs: string[];
+  started_at?: string | null;
+  completed_at?: string | null;
+  reason?: string | null;
+  error?: string | null;
+}
+
+export interface WorkPlan {
+  id: string;
+  run_id: string;
+  session_id: string;
+  skill_id: string;
+  goal: string;
+  summary: string;
+  version: number;
+  sources: string[];
+  run_status: string;
+  tasks: WorkTask[];
+}
+
+function formatErrorDetail(detail: unknown, fallback: string): string {
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    const messages = detail.map((issue) => {
+      if (typeof issue === "string") return issue;
+      if (!issue || typeof issue !== "object") return "Invalid request";
+      const item = issue as { loc?: unknown[]; msg?: unknown };
+      const location = Array.isArray(item.loc)
+        ? item.loc.filter((part) => part !== "body").map(String).join(".")
+        : "";
+      const message = typeof item.msg === "string" ? item.msg : "Invalid request";
+      return location ? `${location}: ${message}` : message;
+    });
+    return messages.join("; ") || fallback;
+  }
+  if (detail && typeof detail === "object") {
+    const item = detail as { message?: unknown; error?: unknown; detail?: unknown };
+    for (const value of [item.message, item.error, item.detail]) {
+      if (typeof value === "string") return value;
+      if (Array.isArray(value)) return formatErrorDetail(value, fallback);
+    }
+    return fallback;
+  }
+  return detail == null ? fallback : String(detail);
+}
+
+function normalizeCustomHeaders(value: unknown): Record<string, string> {
+  let headers = value;
+  if (typeof headers === "string") {
+    try {
+      headers = JSON.parse(headers);
+    } catch {
+      headers = {};
+    }
+  }
+  return headers && typeof headers === "object" && !Array.isArray(headers)
+    ? headers as Record<string, string>
+    : {};
+}
+
+function normalizeProfile(profile: LLMProfile): LLMProfile {
+  const raw = profile as LLMProfile & { custom_headers?: unknown };
+  return { ...profile, custom_headers: normalizeCustomHeaders(raw.custom_headers) };
+}
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     headers: { "Content-Type": "application/json", ...(init?.headers || {}) },
     ...init,
   });
   if (!res.ok) {
-    let detail = res.statusText;
+    let message = res.statusText || `Request failed (${res.status})`;
     try {
       const body = await res.json();
-      detail = body.detail || JSON.stringify(body);
+      message = formatErrorDetail(body?.detail ?? body?.error ?? body?.message, message);
     } catch {}
-    throw new Error(detail);
+    throw new Error(message);
   }
   if (res.status === 204) return undefined as T;
   return res.json();
@@ -188,6 +275,8 @@ export const api = {
     req<void>(`/api/projects/${pid}/sessions/${sid}`, { method: "DELETE" }),
   listMessages: (pid: string, sid: string) =>
     req<{ messages: Message[] }>(`/api/projects/${pid}/sessions/${sid}/messages`),
+  workPlans: (pid: string, sessionId?: string) =>
+    req<{ plans: WorkPlan[] }>(`/api/projects/${pid}/tasks${sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : ""}`),
 
   // chat streaming — returns parsed SSE events via callback
   async chat(
@@ -223,6 +312,18 @@ export const api = {
 
   // skills
   projectSkills: (pid: string) => req<{ skills: Skill[] }>(`/api/projects/${pid}/skills`),
+  skillToolCatalog: () => req<{ tools: SkillTool[] }>("/api/skills/tool-catalog"),
+  createSkill: (pid: string, body: {
+    id: string;
+    name: string;
+    description: string;
+    prompt: string;
+    tools: string[];
+    version?: string;
+    enabled_for_project?: boolean;
+  }) => req<Skill>(`/api/projects/${pid}/skills`, {
+    method: "POST", body: JSON.stringify(body),
+  }),
   toggleSkill: (pid: string, sid: string, enabled: boolean) =>
     req<Skill>(`/api/projects/${pid}/skills/${sid}/enabled`, { method: "PUT", body: JSON.stringify({ enabled }) }),
   runSkill: async (
@@ -262,11 +363,19 @@ export const api = {
   evidence: (pid: string, chunkId: string) => req<Evidence>(`/api/projects/${pid}/evidence/${chunkId}`),
 
   // settings
-  profiles: () => req<{ profiles: LLMProfile[] }>("/api/settings/llm-profiles"),
-  saveProfile: (body: Record<string, unknown>, id?: string) =>
-    req<LLMProfile>(`/api/settings/llm-profiles${id ? `/${id}` : ""}`, {
-      method: id ? "PUT" : "POST", body: JSON.stringify(body),
-    }),
+  profiles: async () => {
+    const response = await req<{ profiles: LLMProfile[] }>("/api/settings/llm-profiles");
+    return { profiles: response.profiles.map(normalizeProfile) };
+  },
+  saveProfile: (body: Record<string, unknown>, id?: string) => {
+    const payload = { ...body };
+    if ("custom_headers" in payload) {
+      payload.custom_headers = normalizeCustomHeaders(payload.custom_headers);
+    }
+    return req<LLMProfile>(`/api/settings/llm-profiles${id ? `/${id}` : ""}`, {
+      method: id ? "PUT" : "POST", body: JSON.stringify(payload),
+    }).then(normalizeProfile);
+  },
   deleteProfile: (id: string) => req<void>(`/api/settings/llm-profiles/${id}`, { method: "DELETE" }),
   testProfile: (id: string) =>
     req<Record<string, any>>(`/api/settings/llm-profiles/${id}/test`, { method: "POST" }),

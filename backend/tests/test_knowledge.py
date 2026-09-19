@@ -128,7 +128,16 @@ def test_upload_pipeline_extracts_entities_relations_with_evidence(client):
     def knowledge_ready():
         ents = client.get(f"/api/projects/{pid}/entities").json()["entities"]
         rels = client.get(f"/api/projects/{pid}/relations").json()["relations"]
-        if len(ents) >= 2 and rels:
+        conflicts = client.get(f"/api/projects/{pid}/conflicts").json()["conflicts"]
+        lifetimes = next(
+            (c for c in conflicts if c["subject"] == "token_lifetime_minutes"),
+            None,
+        )
+        values = {detail["value"] for detail in lifetimes["details"]} if lifetimes else set()
+        # The two uploads are queued independently; entity/relation rows from
+        # the first file can appear before the second file contributes its
+        # conflicting value.
+        if len(ents) >= 2 and rels and values == {30, 60}:
             return ents, rels
         return None
 

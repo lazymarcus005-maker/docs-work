@@ -80,7 +80,9 @@ def stream_turn(
         CANCEL_REGISTRY[run_id] = cancel
 
         transport = getattr(request.app.state, "llm_transport", None) if request else None
-        client = profiles.build_client(conn, secrets, profile, transport=transport)
+        client = profiles.build_client(
+            conn, secrets, profile, transport=transport, session_id=session_id,
+        )
         jev_client = None
         final_text, evidence_refs, run_status = "", [], "FAILED"
         persisted = False

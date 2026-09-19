@@ -13,3 +13,4 @@ scratch-tmp/
 *.db-shm
 .vercel
 frontend/.next
+*.tsbuildinfo
